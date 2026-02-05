@@ -277,8 +277,8 @@ def get_uptrends(ticker):
                 
                 if gain >= min_gain and gain <= max_gain and max_idx > start_idx:
                     uptrends.append({
-                        'start_date': pd.Timestamp(dates[start_idx]).strftime('%b %Y'),
-                        'peak_date': pd.Timestamp(dates[max_idx]).strftime('%b %Y'),
+                        'start_date': pd.Timestamp(dates[start_idx]).strftime('%d %b %Y'),
+                        'peak_date': pd.Timestamp(dates[max_idx]).strftime('%d %b %Y'),
                         'start_price': round(start_price, 2),
                         'peak_price': round(max_price, 2),
                         'gain': round(gain, 1),
@@ -314,6 +314,21 @@ def get_seasonal_analysis(ticker):
     min_gain = float(request.args.get('min_gain', 20)) 
     
     result = analyze_seasonal_patterns(ticker, min_gain)
+    return jsonify(result)
+
+@app.route('/api/predictions/<ticker>')
+def get_predictions(ticker):
+    """
+    API to get predicted future entry/exit dates based on historical patterns
+    """
+    from seasonal_analysis import predict_future_dates
+    from flask import request
+    import warnings
+    warnings.filterwarnings('ignore')
+    
+    min_gain = float(request.args.get('min_gain', 20))
+    
+    result = predict_future_dates(ticker, min_gain)
     return jsonify(result)
 
 @app.route('/seasonal-screener')

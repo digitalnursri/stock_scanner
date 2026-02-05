@@ -263,8 +263,8 @@
                     <thead>
                         <tr>
                             <th>Rank</th>
-                            <th>Start</th>
-                            <th>Peak</th>
+                            <th>Entry Date</th>
+                            <th>Exit Date</th>
                             <th>Duration</th>
                             <th>Start Price</th>
                             <th>Peak Price</th>
@@ -310,8 +310,8 @@
                                 <thead>
                                     <tr>
                                         <th>Month</th>
-                                        <th>Low Date</th>
-                                        <th>High Date</th>
+                                        <th>Entry Date</th>
+                                        <th>Exit Date</th>
                                         <th>Days</th>
                                         <th>Gain</th>
                                     </tr>
@@ -338,6 +338,50 @@
                             </table>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Predicted Future Dates Section -->
+        <div class="analysis-section">
+            <div class="section-header">
+                <h3>🔮 Predicted Future Entry/Exit Dates</h3>
+                <div class="uptrend-filters">
+                    <div class="filter-group">
+                        <label>Min Gain %</label>
+                        <input type="number" id="predictionMinGain" value="20" min="5" max="100" step="5">
+                    </div>
+                    <button class="btn btn-primary" onclick="loadPredictions()">Generate Predictions</button>
+                </div>
+            </div>
+
+            <div id="predictionLoading" class="loading-state" style="display:none;">
+                <p>⏳ Analyzing 10 years of patterns to predict future dates...</p>
+            </div>
+
+            <div id="predictionContent" style="display:none;">
+                <div class="prediction-info"
+                    style="margin-bottom: 16px; padding: 12px; background: var(--bg-hover); border-radius: 8px; border-left: 4px solid var(--accent);">
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">
+                        💡 Predictions are based on historical patterns. Higher confidence = more consistent historical
+                        performance.
+                    </p>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="uptrend-table">
+                        <thead>
+                            <tr>
+                                <th>Month</th>
+                                <th>Entry Date</th>
+                                <th>Exit Date</th>
+                                <th>Duration</th>
+                                <th>Expected Gain</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="predictionTableBody"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -646,6 +690,65 @@
                     console.error(err);
                 } finally {
                     document.getElementById('seasonalLoading').style.display = 'none';
+                }
+            }
+
+            async function loadPredictions() {
+                document.getElementById('predictionLoading').style.display = 'block';
+                document.getElementById('predictionContent').style.display = 'none';
+
+                const minGain = document.getElementById('predictionMinGain').value || 20;
+
+                try {
+                    const response = await fetch(`/api/predictions/${ticker}?min_gain=${minGain}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+
+                    const tbody = document.getElementById('predictionTableBody');
+                    tbody.innerHTML = '';
+
+                    if (data.predictions.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="6">No predictions available. Try lowering the minimum gain filter.</td></tr>`;
+                    } else {
+                        data.predictions.forEach(p => {
+                            // Color code confidence
+                            let confidenceClass = '';
+                            let confidenceIcon = '';
+                            if (p.confidence >= 70) {
+                                confidenceClass = 'positive';
+                                confidenceIcon = '🟢';
+                            } else if (p.confidence >= 50) {
+                                confidenceClass = '';
+                                confidenceIcon = '🟡';
+                            } else {
+                                confidenceClass = 'negative';
+                                confidenceIcon = '🔴';
+                            }
+
+                            const row = document.createElement('tr');
+                            row.innerHTML = `
+                                <td><strong>${p.month} ${p.year}</strong></td>
+                                <td>${p.predicted_entry}</td>
+                                <td>${p.predicted_exit}</td>
+                                <td>${p.predicted_duration} days</td>
+                                <td class="positive">+${p.expected_gain}%</td>
+                                <td class="${confidenceClass}">${confidenceIcon} ${p.confidence}%</td>
+                            `;
+                            tbody.appendChild(row);
+                        });
+                    }
+
+                    document.getElementById('predictionContent').style.display = 'block';
+
+                } catch (err) {
+                    console.error(err);
+                    alert('Failed to load predictions');
+                } finally {
+                    document.getElementById('predictionLoading').style.display = 'none';
                 }
             }
         </script>

@@ -205,6 +205,148 @@ def analyze_seasonal_patterns(ticker, min_gain_percent=20):
         print(f"Error in seasonal analysis: {e}")
         traceback.print_exc()
         return {'error': str(e)}
+def predict_future_dates(ticker, min_gain_percent=20):
+    """
+    Predicts future entry and exit dates based on 10 years of historical seasonal patterns.
+    
+    Args:
+        ticker (str): Stock ticker (e.g., 'RELIANCE').
+        min_gain_percent (float): Minimum % gain to qualify as a historical move.
+        
+    Returns:
+        dict: containing 'predictions' with future entry/exit dates
+    """
+    from datetime import datetime
+    from dateutil.relativedelta import relativedelta
+    
+    # First get historical analysis
+    analysis = analyze_seasonal_patterns(ticker, min_gain_percent)
+    
+    if 'error' in analysis:
+        return analysis
+    
+    moves = []
+    # We need the raw moves with day information, re-parse from analysis
+    full_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
+    
+    try:
+        stock = yf.Ticker(full_ticker)
+        hist = stock.history(period="10y", interval="1d")
+        
+        if hist.empty or len(hist) < 250:
+            return {'error': 'Insufficient historical data'}
+        
+        df = hist.reset_index()
+        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+        df = df.sort_values('Date', ascending=True).reset_index(drop=True)
+        
+        dates_list = df['Date'].tolist()
+        lows = df['Low'].values
+        highs = df['High'].values
+        n_days = len(df)
+        
+        # Collect moves with day information
+        raw_moves = []
+        for i in range(n_days - 20):
+            start_date = dates_list[i]
+            start_price = lows[i]
+            
+            max_gain = 0
+            best_day_idx = -1
+            look_ahead_idx = min(i + 65, n_days)
+            
+            for j in range(i + 1, look_ahead_idx):
+                curr_high = highs[j]
+                gain = ((curr_high - start_price) / start_price) * 100
+                if gain > max_gain:
+                    max_gain = gain
+                    best_day_idx = j
+            
+            if max_gain >= min_gain_percent and best_day_idx > i:
+                end_date = dates_list[best_day_idx]
+                duration_days = (end_date - start_date).days
+                if duration_days > 0:
+                    raw_moves.append({
+                        'start_date': start_date,
+                        'end_date': end_date,
+                        'start_day': start_date.day,
+                        'start_month': start_date.month,
+                        'start_year': start_date.year,
+                        'duration': duration_days,
+                        'gain': max_gain
+                    })
+        
+        # Aggregate by month
+        month_names = ['January', 'February', 'March', 'April', 'May', 'June',
+                       'July', 'August', 'September', 'October', 'November', 'December']
+        
+        monthly_data = {i+1: {'days': [], 'durations': [], 'gains': [], 'years': set()} 
+                        for i in range(12)}
+        
+        for move in raw_moves:
+            m = move['start_month']
+            monthly_data[m]['days'].append(move['start_day'])
+            monthly_data[m]['durations'].append(move['duration'])
+            monthly_data[m]['gains'].append(move['gain'])
+            monthly_data[m]['years'].add(move['start_year'])
+        
+        # Generate predictions for next 12 months
+        today = datetime.now()
+        predictions = []
+        
+        for month_offset in range(12):
+            target_date = today + relativedelta(months=month_offset)
+            target_month = target_date.month
+            target_year = target_date.year
+            
+            data = monthly_data[target_month]
+            
+            if len(data['days']) >= 2:  # Need at least 2 occurrences
+                avg_day = int(round(sum(data['days']) / len(data['days'])))
+                avg_duration = int(round(sum(data['durations']) / len(data['durations'])))
+                avg_gain = round(sum(data['gains']) / len(data['gains']), 1)
+                
+                # Clamp day to valid range
+                import calendar
+                max_day = calendar.monthrange(target_year, target_month)[1]
+                avg_day = min(avg_day, max_day)
+                
+                entry_date = datetime(target_year, target_month, avg_day)
+                exit_date = entry_date + relativedelta(days=avg_duration)
+                
+                # Calculate confidence based on success rate and occurrences
+                success_rate = min((len(data['years']) / 10) * 100, 100)
+                occurrences = len(data['days'])
+                confidence = min(100, int(success_rate * 0.6 + occurrences * 4))
+                
+                predictions.append({
+                    'month': month_names[target_month - 1],
+                    'year': target_year,
+                    'predicted_entry': entry_date.strftime('%d %b %Y'),
+                    'predicted_exit': exit_date.strftime('%d %b %Y'),
+                    'predicted_duration': avg_duration,
+                    'expected_gain': avg_gain,
+                    'confidence': confidence,
+                    'historical_occurrences': occurrences,
+                    'success_rate': round(success_rate, 0)
+                })
+        
+        # Sort by confidence (highest first)
+        predictions.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        return {
+            'ticker': ticker,
+            'predictions': predictions,
+            'analysis_period': '10 years',
+            'min_gain_filter': min_gain_percent
+        }
+        
+    except Exception as e:
+        import traceback
+        print(f"Error in prediction: {e}")
+        traceback.print_exc()
+        return {'error': str(e)}
+
 
 if __name__ == "__main__":
     # Test
