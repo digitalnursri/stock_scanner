@@ -205,13 +205,14 @@ def analyze_seasonal_patterns(ticker, min_gain_percent=20):
         print(f"Error in seasonal analysis: {e}")
         traceback.print_exc()
         return {'error': str(e)}
-def predict_future_dates(ticker, min_gain_percent=20):
+def predict_future_dates(ticker, min_gain_percent=20, min_success_rate=80):
     """
     Predicts future entry and exit dates based on 10 years of historical seasonal patterns.
     
     Args:
         ticker (str): Stock ticker (e.g., 'RELIANCE').
         min_gain_percent (float): Minimum % gain to qualify as a historical move.
+        min_success_rate (float): Minimum success rate (%) to include in predictions.
         
     Returns:
         dict: containing 'predictions' with future entry/exit dates
@@ -316,6 +317,11 @@ def predict_future_dates(ticker, min_gain_percent=20):
                 
                 # Calculate confidence based on success rate and occurrences
                 success_rate = min((len(data['years']) / 10) * 100, 100)
+                
+                # Filter by minimum success rate
+                if success_rate < min_success_rate:
+                    continue
+                    
                 occurrences = len(data['days'])
                 confidence = min(100, int(success_rate * 0.6 + occurrences * 4))
                 
@@ -338,7 +344,8 @@ def predict_future_dates(ticker, min_gain_percent=20):
             'ticker': ticker,
             'predictions': predictions,
             'analysis_period': '10 years',
-            'min_gain_filter': min_gain_percent
+            'min_gain_filter': min_gain_percent,
+            'min_success_rate_filter': min_success_rate
         }
         
     except Exception as e:

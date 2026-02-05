@@ -327,8 +327,9 @@ def get_predictions(ticker):
     warnings.filterwarnings('ignore')
     
     min_gain = float(request.args.get('min_gain', 20))
+    min_success_rate = float(request.args.get('min_success_rate', 80))
     
-    result = predict_future_dates(ticker, min_gain)
+    result = predict_future_dates(ticker, min_gain, min_success_rate)
     return jsonify(result)
 
 @app.route('/seasonal-screener')
