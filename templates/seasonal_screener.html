@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seasonal Screener | Stock Screener</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .screener-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .screener-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .screener-title h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .screener-filters {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-control {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-control label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-control select,
+        .filter-control input {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            min-width: 120px;
+            cursor: pointer;
+        }
+
+        .filter-control select option {
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            padding: 8px;
+        }
+
+        .filter-control select:focus,
+        .filter-control input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .btn-analyze {
+            padding: 10px 24px;
+            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-analyze:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+
+        .btn-analyze:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .screener-stats {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 24px;
+            min-width: 150px;
+        }
+
+        .stat-card .value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-card .label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .screener-table-wrapper {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .screener-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .screener-table th {
+            background: var(--bg);
+            padding: 14px 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .screener-table th:hover {
+            color: var(--accent);
+        }
+
+        .screener-table th.sorted-asc::after {
+            content: ' ↑';
+        }
+
+        .screener-table th.sorted-desc::after {
+            content: ' ↓';
+        }
+
+        .screener-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.95rem;
+        }
+
+        .screener-table tbody tr:hover {
+            background: rgba(139, 92, 246, 0.05);
+        }
+
+        .screener-table .ticker-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .screener-table .ticker-link:hover {
+            text-decoration: underline;
+        }
+
+        .screener-table .positive {
+            color: var(--green);
+        }
+
+        .screener-table .month-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--accent);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 1.1rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state h3 {
+            margin-bottom: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .screener-filters {
+                width: 100%;
+            }
+
+            .filter-control {
+                flex: 1;
+            }
+
+            .screener-table {
+                font-size: 0.85rem;
+            }
+
+            .screener-table th,
+            .screener-table td {
+                padding: 10px 8px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1 class="logo">📈 Stock<span class="accent">Screener</span></h1>
+                <span class="badge">Seasonal</span>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+            </div>
+        </header>
+
+        <!-- Screener Controls -->
+        <div class="screener-header">
+            <div class="screener-title">
+                <h2>🌸 Seasonal Pattern Screener</h2>
+            </div>
+            <div class="screener-filters">
+                <div class="filter-control">
+                    <label>Min Gain %</label>
+                    <input type="number" id="minGainFilter" value="20" min="5" max="100" step="5">
+                </div>
+                <div class="filter-control">
+                    <label>Target Month</label>
+                    <select id="monthFilter">
+                        <option value="">All Months</option>
+                        <option value="January">January</option>
+                        <option value="February">February</option>
+                        <option value="March">March</option>
+                        <option value="April">April</option>
+                        <option value="May">May</option>
+                        <option value="June">June</option>
+                        <option value="July">July</option>
+                        <option value="August">August</option>
+                        <option value="September">September</option>
+                        <option value="October">October</option>
+                        <option value="November">November</option>
+                        <option value="December">December</option>
+                    </select>
+                </div>
+                <div class="filter-control">
+                    <label>Min Rallies</label>
+                    <input type="number" id="minRalliesFilter" value="5" min="1" max="50">
+                </div>
+                <div class="filter-control">
+                    <label>Min Success Rate</label>
+                    <select id="successRateFilter">
+                        <option value="0">Any</option>
+                        <option value="30">≥ 30%</option>
+                        <option value="50">≥ 50%</option>
+                        <option value="70">≥ 70%</option>
+                        <option value="80">≥ 80%</option>
+                        <option value="90">≥ 90%</option>
+                        <option value="100">100%</option>
+                    </select>
+                </div>
+                <button class="btn-analyze" id="analyzeBtn" onclick="loadScreenerData()">
+                    🔍 Analyze Stocks
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="screener-stats" id="statsContainer" style="display: none;">
+            <div class="stat-card">
+                <div class="value" id="totalStocksValue">0</div>
+                <div class="label">Stocks Analyzed</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="matchingStocksValue">0</div>
+                <div class="label">Matching Filters</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="topMonthValue">-</div>
+                <div class="label">Most Common Best Month</div>
+            </div>
+        </div>
+
+        <!-- Results Table -->
+        <div class="screener-table-wrapper" id="resultsContainer" style="display: none;">
+            <table class="screener-table">
+                <thead>
+                    <tr>
+                        <th onclick="sortByColumn('ticker')">Ticker</th>
+                        <th onclick="sortByColumn('total_rallies')">Total Rallies</th>
+                        <th onclick="sortByColumn('best_month')">Best Month</th>
+                        <th onclick="sortByColumn('best_month_rallies')">Month Rallies</th>
+                        <th onclick="sortByColumn('best_month_avg_gain')">Avg Gain %</th>
+                        <th onclick="sortByColumn('best_month_success')">Success Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state" id="emptyState">
+            <h3>🌸 Seasonal Pattern Screener</h3>
+            <p>Find stocks with strong seasonal patterns. Click "Analyze Stocks" to begin.</p>
+            <p style="font-size: 0.85rem; margin-top: 12px;">
+                ⚠️ First analysis may take 2-3 minutes as we fetch data for 50 stocks.
+            </p>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Analyzing seasonal patterns... This may take a few minutes.</div>
+    </div>
+
+    <script>
+        let allResults = [];
+        let sortColumn = 'total_rallies';
+        let sortDirection = 'desc';
+
+        async function loadScreenerData() {
+            const minGain = document.getElementById('minGainFilter').value;
+            const btn = document.getElementById('analyzeBtn');
+            const loading = document.getElementById('loadingOverlay');
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Analyzing...';
+            loading.classList.add('active');
+
+            try {
+                const response = await fetch(`/api/seasonal-screener?min_gain=${minGain}`);
+                const data = await response.json();
+
+                if (data.stocks) {
+                    allResults = data.stocks;
+                    applyFiltersAndRender();
+
+                    document.getElementById('totalStocksValue').textContent = data.total_analyzed;
+                    document.getElementById('statsContainer').style.display = 'flex';
+                    document.getElementById('resultsContainer').style.display = 'block';
+                    document.getElementById('emptyState').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to load data. Please try again.');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Analyze Stocks';
+                loading.classList.remove('active');
+            }
+        }
+
+        function applyFiltersAndRender() {
+            const monthFilter = document.getElementById('monthFilter').value;
+            const minRalliesInput = document.getElementById('minRalliesFilter').value;
+            const minRallies = minRalliesInput ? parseInt(minRalliesInput, 10) : 0;
+            const minSuccessRate = parseInt(document.getElementById('successRateFilter').value, 10) || 0;
+
+            console.log('Filtering with minRallies:', minRallies, 'minSuccessRate:', minSuccessRate);
+
+            let filtered = allResults.filter(stock => {
+                // Filter by best month's rallies (Month Rallies column)
+                if (stock.best_month_rallies < minRallies) {
+                    return false;
+                }
+
+                // Filter by success rate
+                if (stock.max_success_rate < minSuccessRate) {
+                    return false;
+                }
+
+                // Filter by target month - show only stocks where this is the BEST month
+                if (monthFilter && stock.best_month !== monthFilter) {
+                    return false;
+                }
+
+                return true;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                let aVal = a[sortColumn];
+                let bVal = b[sortColumn];
+
+                if (typeof aVal === 'string') {
+                    return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                }
+                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+
+            // Update stats
+            document.getElementById('matchingStocksValue').textContent = filtered.length;
+
+            // Find most common best month
+            const monthCounts = {};
+            filtered.forEach(s => {
+                monthCounts[s.best_month] = (monthCounts[s.best_month] || 0) + 1;
+            });
+            const topMonth = Object.entries(monthCounts).sort((a, b) => b[1] - a[1])[0];
+            document.getElementById('topMonthValue').textContent = topMonth ? topMonth[0] : '-';
+
+            // Render table
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+
+            filtered.forEach(stock => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><a href="/stock/${stock.ticker}" class="ticker-link">${stock.ticker}</a></td>
+                    <td>${stock.total_rallies}</td>
+                    <td><span class="month-badge">${stock.best_month}</span></td>
+                    <td>${stock.best_month_rallies}</td>
+                    <td class="positive">+${stock.best_month_avg_gain}%</td>
+                    <td>${stock.best_month_success}%</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function sortByColumn(column) {
+            if (sortColumn === column) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortColumn = column;
+                sortDirection = 'desc';
+            }
+
+            // Update header styles
+            document.querySelectorAll('.screener-table th').forEach(th => {
+                th.classList.remove('sorted-asc', 'sorted-desc');
+            });
+
+            applyFiltersAndRender();
+        }
+
+        // Re-filter when filter values change (only if data is loaded)
+        document.getElementById('monthFilter').addEventListener('change', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+        document.getElementById('minRalliesFilter').addEventListener('change', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+        document.getElementById('minRalliesFilter').addEventListener('input', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+        document.getElementById('successRateFilter').addEventListener('change', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+    </script>
+</body>
+
+</html>

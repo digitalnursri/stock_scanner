@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Screener | Nifty 250</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1 class="logo">📈 Stock<span class="accent">Screener</span></h1>
+                <span class="badge">Nifty 250</span>
+            </div>
+            <div class="header-right">
+                <div class="search-wrapper">
+                    <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="m21 21-4.35-4.35" />
+                    </svg>
+                    <input type="text" id="searchInput" placeholder="Search stocks..." onkeyup="applyFilters()">
+                </div>
+                <a href="/seasonal-screener" class="btn btn-secondary" style="margin-right: 8px;">
+                    🌸 Seasonal Screener
+                </a>
+                <button onclick="window.location.reload();" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                        <path d="M16 21h5v-5" />
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+        </header>
+
+        <!-- Filter Bar -->
+        <div class="filters">
+            <div class="filter-group">
+                <label>Signal</label>
+                <select id="signalFilter" onchange="applyFilters()">
+                    <option value="all">All Signals</option>
+                    <option value="Bullish">🟢 Bullish</option>
+                    <option value="Bearish">🔴 Bearish</option>
+                    <option value="Neutral">⚪ Neutral</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Action</label>
+                <select id="actionFilter" onchange="applyFilters()">
+                    <option value="all">All Actions</option>
+                    <option value="Strong Buy">💰 Strong Buy</option>
+                    <option value="Buy">🛒 Buy</option>
+                    <option value="Hold">⏸️ Hold</option>
+                    <option value="Sell">📤 Sell</option>
+                    <option value="Strong Sell">🚨 Strong Sell</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>RSI Zone</label>
+                <select id="rsiFilter" onchange="applyFilters()">
+                    <option value="all">All RSI</option>
+                    <option value="oversold">Oversold (&lt;30)</option>
+                    <option value="overbought">Overbought (&gt;70)</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Sort By</label>
+                <select id="sortBy" onchange="sortTable()">
+                    <option value="score-desc">Score (Best First)</option>
+                    <option value="score-asc">Score (Worst First)</option>
+                    <option value="ticker-asc">Ticker (A-Z)</option>
+                    <option value="price-desc">Price (High to Low)</option>
+                    <option value="mcap-desc">Market Cap (Largest)</option>
+                    <option value="rsi-asc">RSI (Lowest First)</option>
+                </select>
+            </div>
+            <button class="btn btn-secondary" onclick="resetFilters()">Reset</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats">
+            <span id="stockCount">{{ stocks|length }} stocks</span>
+            <div class="legend">
+                <span class="legend-item"><span class="dot green"></span>Bullish</span>
+                <span class="legend-item"><span class="dot red"></span>Bearish</span>
+                <span class="legend-item"><span class="dot gray"></span>Neutral</span>
+            </div>
+        </div>
+
+        {% if stocks %}
+        <!-- Table -->
+        <div class="table-wrapper">
+            <table id="stockTable">
+                <thead>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Price</th>
+                        <th>Mkt Cap</th>
+                        <th>RSI</th>
+                        <th>DMA 50</th>
+                        <th>DMA 100</th>
+                        <th>DMA 200</th>
+                        <th>Signal</th>
+                        <th>Action</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stock in stocks %}
+                    <tr data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
+                        data-dma200="{{ stock['DMA 200'] }}" data-mcap="{{ stock['Market Cap'] }}"
+                        data-signal="{{ stock.Signal }}" data-suggestion="{{ stock.Suggestion }}"
+                        data-score="{{ stock.Score }}">
+                        <td class="ticker"><a href="/stock/{{ stock.Ticker }}">{{ stock.Ticker }}</a></td>
+                        <td class="price">₹{{ stock.Price }}</td>
+                        <td class="mcap">{{ stock['Market Cap'] }}</td>
+                        <td
+                            class="rsi {{ 'rsi-low' if stock.RSI is number and stock.RSI < 30 else 'rsi-high' if stock.RSI is number and stock.RSI > 70 else '' }}">
+                            {{ stock.RSI }}</td>
+                        <td>{{ stock['DMA 50'] }}</td>
+                        <td>{{ stock['DMA 100'] }}</td>
+                        <td>{{ stock['DMA 200'] }}</td>
+                        <td><span class="signal-badge {{ stock.Signal|lower }}">{{ stock.Signal }}</span></td>
+                        <td><span class="action-badge {{ stock.Suggestion|lower|replace(' ', '-') }}">{{
+                                stock.Suggestion }}</span></td>
+                        <td
+                            class="score {{ 'positive' if stock.Score > 0 else 'negative' if stock.Score < 0 else '' }}">
+                            {{ stock.Score }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>Loading market data...</p>
+        </div>
+        {% endif %}
+
+        <!-- Footer Legend -->
+        <div class="footer-info">
+            <h4>📊 How Scores Work</h4>
+            <div class="info-grid">
+                <div class="info-item">
+                    <strong>Trend Analysis</strong>
+                    <p>Price above all DMAs = Strong Uptrend (+3)</p>
+                </div>
+                <div class="info-item">
+                    <strong>Golden/Death Cross</strong>
+                    <p>DMA50 > DMA200 = Bullish (+2)</p>
+                </div>
+                <div class="info-item">
+                    <strong>RSI Momentum</strong>
+                    <p>RSI < 30=Oversold (+3), RSI> 70 = Overbought (-3)</p>
+                </div>
+                <div class="info-item">
+                    <strong>Action Guide</strong>
+                    <p>Score ≥5: Strong Buy | ≥3: Buy | -2 to 2: Hold | ≤-3: Sell</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function applyFilters() {
+            const search = document.getElementById("searchInput").value.toUpperCase();
+            const signalFilter = document.getElementById("signalFilter").value;
+            const actionFilter = document.getElementById("actionFilter").value;
+            const rsiFilter = document.getElementById("rsiFilter").value;
+            const rows = document.querySelectorAll("#stockTable tbody tr");
+            let count = 0;
+
+            rows.forEach(row => {
+                const ticker = row.cells[0].textContent.toUpperCase();
+                const rsi = parseFloat(row.dataset.rsi);
+                const signal = row.dataset.signal;
+                const action = row.dataset.suggestion;
+                let show = true;
+
+                if (search && !ticker.includes(search)) show = false;
+                if (signalFilter !== "all" && signal !== signalFilter) show = false;
+                if (actionFilter !== "all" && action !== actionFilter) show = false;
+                if (rsiFilter === "oversold" && (isNaN(rsi) || rsi >= 30)) show = false;
+                if (rsiFilter === "overbought" && (isNaN(rsi) || rsi <= 70)) show = false;
+
+                row.style.display = show ? "" : "none";
+                if (show) count++;
+            });
+
+            document.getElementById("stockCount").textContent = `${count} stocks`;
+        }
+
+        function sortTable() {
+            const sortBy = document.getElementById("sortBy").value;
+            const tbody = document.querySelector("#stockTable tbody");
+            const rows = Array.from(tbody.querySelectorAll("tr"));
+
+            rows.sort((a, b) => {
+                const [col, order] = sortBy.split("-");
+                let valA, valB;
+
+                if (col === "ticker") {
+                    valA = a.cells[0].textContent;
+                    valB = b.cells[0].textContent;
+                    return order === "asc" ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                } else if (col === "price") {
+                    valA = parseFloat(a.dataset.price) || 0;
+                    valB = parseFloat(b.dataset.price) || 0;
+                } else if (col === "rsi") {
+                    valA = parseFloat(a.dataset.rsi) || 50;
+                    valB = parseFloat(b.dataset.rsi) || 50;
+                } else if (col === "mcap") {
+                    valA = parseFloat(a.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
+                    valB = parseFloat(b.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
+                } else if (col === "score") {
+                    valA = parseInt(a.dataset.score) || 0;
+                    valB = parseInt(b.dataset.score) || 0;
+                }
+
+                return order === "asc" ? valA - valB : valB - valA;
+            });
+
+            rows.forEach(row => tbody.appendChild(row));
+            applyFilters();
+        }
+
+        function resetFilters() {
+            document.getElementById("searchInput").value = "";
+            document.getElementById("signalFilter").value = "all";
+            document.getElementById("actionFilter").value = "all";
+            document.getElementById("rsiFilter").value = "all";
+            document.getElementById("sortBy").value = "score-desc";
+            applyFilters();
+            sortTable();
+        }
+
+        // Initial sort by score
+        window.onload = function () {
+            sortTable();
+        };
+    </script>
+</body>
+
+</html>

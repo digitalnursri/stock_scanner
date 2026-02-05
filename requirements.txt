@@ -1,0 +1,6 @@
+yfinance
+pandas
+tabulate
+nselib
+Flask==3.1.2
+prophet

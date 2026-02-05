@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ ticker }} | Stock Details</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <a href="/" class="back-link">← Back to Screener</a>
+            </div>
+        </header>
+
+        {% if error %}
+        <div class="error-state">
+            <h2>Error Loading {{ ticker }}</h2>
+            <p>{{ error }}</p>
+            <a href="/" class="btn btn-primary">Go Back</a>
+        </div>
+        {% else %}
+        <!-- Stock Info -->
+        <div class="stock-header">
+            <div class="stock-title">
+                <h1>{{ ticker }}</h1>
+                <span class="exchange-badge">NSE</span>
+            </div>
+            <div class="stock-price">
+                <span class="current-price">₹{{ current_price }}</span>
+            </div>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-label">Market Cap</span>
+                <span class="stat-value">₹{{ market_cap }} Cr</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">1 Year Return</span>
+                <span class="stat-value {{ 'positive' if ytd_change > 0 else 'negative' if ytd_change < 0 else '' }}">
+                    {{ ytd_change }}%
+                </span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">5 Year Return</span>
+                <span
+                    class="stat-value {{ 'positive' if five_yr_change > 0 else 'negative' if five_yr_change < 0 else '' }}">
+                    {{ five_yr_change }}%
+                </span>
+            </div>
+            <div class="stat-card" id="periodChange">
+                <span class="stat-label">Period Return</span>
+                <span class="stat-value" id="periodChangeValue">--</span>
+            </div>
+        </div>
+
+        <!-- Chart -->
+        <div class="chart-container">
+            <div class="chart-header">
+                <h3>📈 Price History</h3>
+                <div class="period-buttons">
+                    <button class="period-btn" data-period="1d">1D</button>
+                    <button class="period-btn" data-period="5d">5D</button>
+                    <button class="period-btn" data-period="1mo">1M</button>
+                    <button class="period-btn" data-period="3mo">3M</button>
+                    <button class="period-btn" data-period="6mo">6M</button>
+                    <button class="period-btn active" data-period="1y">1Y</button>
+                    <button class="period-btn" data-period="2y">2Y</button>
+                    <button class="period-btn" data-period="5y">5Y</button>
+                    <button class="period-btn" data-period="10y">10Y</button>
+                </div>
+            </div>
+            <div class="chart-loading" id="chartLoading">Loading chart...</div>
+            <canvas id="priceChart"></canvas>
+        </div>
+
+        <script>
+            const ticker = "{{ ticker }}";
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            let priceChart = null;
+
+            function createGradient() {
+                const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+                gradient.addColorStop(0, 'rgba(59, 130, 246, 0.4)');
+                gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+                return gradient;
+            }
+
+            async function loadChart(period) {
+                document.getElementById('chartLoading').style.display = 'block';
+                document.getElementById('priceChart').style.opacity = '0.3';
+
+                try {
+                    const response = await fetch(`/api/chart/${ticker}?period=${period}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        alert('Error loading data: ' + data.error);
+                        return;
+                    }
+
+                    // Update period change
+                    const changeEl = document.getElementById('periodChangeValue');
+                    changeEl.textContent = data.change + '%';
+                    changeEl.className = 'stat-value ' + (data.change >= 0 ? 'positive' : 'negative');
+
+                    // Destroy old chart
+                    if (priceChart) {
+                        priceChart.destroy();
+                    }
+
+                    // Create new chart
+                    priceChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: data.dates,
+                            datasets: [{
+                                label: 'Price (₹)',
+                                data: data.prices,
+                                borderColor: data.change >= 0 ? '#10b981' : '#ef4444',
+                                backgroundColor: createGradient(),
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                pointHoverBackgroundColor: data.change >= 0 ? '#10b981' : '#ef4444',
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: '#1f2937',
+                                    titleColor: '#f9fafb',
+                                    bodyColor: '#9ca3af',
+                                    borderColor: '#374151',
+                                    borderWidth: 1,
+                                    padding: 12,
+                                    displayColors: false,
+                                    callbacks: {
+                                        label: (context) => '₹' + context.parsed.y.toLocaleString('en-IN')
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                    ticks: { color: '#9ca3af', maxTicksLimit: 10, font: { size: 11 } }
+                                },
+                                y: {
+                                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                    ticks: {
+                                        color: '#9ca3af',
+                                        font: { size: 11 },
+                                        callback: (value) => '₹' + value.toLocaleString('en-IN')
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                } catch (err) {
+                    console.error('Error:', err);
+                } finally {
+                    document.getElementById('chartLoading').style.display = 'none';
+                    document.getElementById('priceChart').style.opacity = '1';
+                }
+            }
+
+            // Period button click handlers
+            document.querySelectorAll('.period-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    loadChart(btn.dataset.period);
+                });
+            });
+
+            // Load default 1Y chart
+            loadChart('1y');
+        </script>
+
+        <!-- Forecast Section -->
+        <div class="analysis-section">
+            <div class="section-header">
+                <h3>🔮 12-Month Price Forecast</h3>
+            </div>
+            <div id="forecastLoading" class="loading-state">
+                <p>⏳ Training AI model... This may take 10-30 seconds</p>
+            </div>
+            <div id="forecastContent" style="display:none;">
+                <div class="forecast-stats">
+                    <div class="forecast-stat">
+                        <span class="label">Current Price</span>
+                        <span class="value" id="fcCurrentPrice">--</span>
+                    </div>
+                    <div class="forecast-stat">
+                        <span class="label">12-Month Target</span>
+                        <span class="value" id="fcTargetPrice">--</span>
+                    </div>
+                    <div class="forecast-stat">
+                        <span class="label">Expected Return</span>
+                        <span class="value" id="fcReturn">--</span>
+                    </div>
+                    <div class="forecast-stat">
+                        <span class="label">Confidence</span>
+                        <span class="value" id="fcConfidence">--</span>
+                    </div>
+                </div>
+                <canvas id="forecastChart"></canvas>
+                <div class="forecast-table">
+                    <h4>Monthly Predictions</h4>
+                    <table id="forecastTable">
+                        <thead>
+                            <tr>
+                                <th>Month</th>
+                                <th>Predicted Price</th>
+                                <th>Lower Bound</th>
+                                <th>Upper Bound</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Uptrend Analysis Section -->
+        <div class="analysis-section">
+            <div class="section-header">
+                <h3>📈 Historical Uptrend Analysis (10 Years)</h3>
+                <div class="uptrend-filters">
+                    <div class="filter-group">
+                        <label>Min Gain %</label>
+                        <input type="number" id="minGain" value="1" min="1" max="200" step="1">
+                    </div>
+                    <div class="filter-group">
+                        <label>Max Gain %</label>
+                        <input type="number" id="maxGain" value="200" min="1" max="500" step="1">
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadUptrends()">Analyze Uptrends</button>
+                </div>
+            </div>
+            <div id="uptrendLoading" class="loading-state" style="display:none;">
+                <p>⏳ Analyzing price patterns...</p>
+            </div>
+            <div id="uptrendContent" style="display:none;">
+                <table class="uptrend-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Start</th>
+                            <th>Peak</th>
+                            <th>Duration</th>
+                            <th>Start Price</th>
+                            <th>Peak Price</th>
+                            <th>Gain %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="uptrendTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Seasonal Analysis Section -->
+        <div class="analysis-section">
+            <div class="section-header">
+                <h3>📅 Seasonal Pattern Analysis (10 Years)</h3>
+                <div class="uptrend-filters">
+                    <div class="filter-group">
+                        <label>Min Gain %</label>
+                        <input type="number" id="seasonalMinGain" value="20" min="5" max="100" step="5">
+                    </div>
+                    <button class="btn btn-primary" onclick="loadSeasonality()">Analyze Seasonality</button>
+                </div>
+            </div>
+
+            <div id="seasonalLoading" class="loading-state" style="display:none;">
+                <p>⏳ Mining 10 years of data for patterns...</p>
+            </div>
+
+            <div id="seasonalContent" style="display:none;">
+
+                <!-- Best Months Cards -->
+                <div id="seasonalInsights" style="margin-bottom: 24px;"></div>
+
+                <div class="seasonal-best-grid" id="bestMonthsGrid"></div>
+
+                <!-- Tables Grid -->
+                <div class="seasonal-tables-grid">
+                    <!-- Detailed Moves -->
+                    <div class="table-panel">
+                        <h4>📜 All Identified Rallies</h4>
+                        <div class="table-wrapper" style="max-height: 500px; overflow-y: auto;">
+                            <table class="uptrend-table">
+                                <thead>
+                                    <tr>
+                                        <th>Month</th>
+                                        <th>Low Date</th>
+                                        <th>High Date</th>
+                                        <th>Days</th>
+                                        <th>Gain</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="seasonalMovesBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Monthly Stats -->
+                    <div class="table-panel">
+                        <h4>📊 Monthly Success Rate</h4>
+                        <div class="table-wrapper">
+                            <table class="uptrend-table">
+                                <thead>
+                                    <tr>
+                                        <th>Month</th>
+                                        <th>Count</th>
+                                        <th>Avg Gain</th>
+                                        <th>Win Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="seasonalStatsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let forecastChart = null;
+
+            async function loadForecast() {
+                // Remove button logic
+                document.getElementById('forecastLoading').style.display = 'block';
+                document.getElementById('forecastContent').style.display = 'none';
+
+                try {
+                    const response = await fetch(`/api/forecast/${ticker}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        document.getElementById('forecastLoading').innerHTML = `<p class="error-text">Error: ${data.error}</p>`;
+                        return;
+                    }
+
+                    // Update stats
+                    document.getElementById('fcCurrentPrice').textContent = '₹' + data.current_price;
+                    document.getElementById('fcTargetPrice').textContent = '₹' + data.forecast_12m;
+                    const retEl = document.getElementById('fcReturn');
+                    retEl.textContent = data.expected_return + '%';
+                    retEl.className = 'value ' + (data.expected_return >= 0 ? 'positive' : 'negative');
+                    document.getElementById('fcConfidence').textContent = data.confidence + '%';
+
+                    // Connect the lines: Add last historical point to forecast
+                    const lastHistPrice = data.historical_prices[data.historical_prices.length - 1];
+                    const connectedForecastPrices = [lastHistPrice, ...data.forecast_prices];
+                    // Add nulls to align
+                    const histDataWithNulls = [...data.historical_prices, ...Array(12).fill(null)];
+                    const forecastDataWithPadding = [...Array(data.historical_dates.length - 1).fill(null), ...connectedForecastPrices];
+
+                    // Create gradients
+                    const fcCtx = document.getElementById('forecastChart').getContext('2d');
+
+                    const histGradient = fcCtx.createLinearGradient(0, 0, 0, 400);
+                    histGradient.addColorStop(0, 'rgba(59, 130, 246, 0.4)'); // Blue
+                    histGradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
+                    const forecastGradient = fcCtx.createLinearGradient(0, 0, 0, 400);
+                    forecastGradient.addColorStop(0, 'rgba(16, 185, 129, 0.4)'); // Green
+                    forecastGradient.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+                    if (forecastChart) forecastChart.destroy();
+
+                    forecastChart = new Chart(fcCtx, {
+                        type: 'line',
+                        data: {
+                            labels: [...data.historical_dates, ...data.forecast_dates],
+                            datasets: [
+                                {
+                                    label: 'Historical',
+                                    data: histDataWithNulls,
+                                    borderColor: '#3b82f6', // Premium Blue
+                                    backgroundColor: histGradient,
+                                    fill: true,
+                                    tension: 0.4,
+                                    pointRadius: 0,
+                                    pointHoverRadius: 6,
+                                    borderWidth: 2
+                                },
+                                {
+                                    label: 'Forecast',
+                                    data: forecastDataWithPadding,
+                                    borderColor: '#10b981', // Premium Green
+                                    backgroundColor: forecastGradient,
+                                    borderDash: [5, 5],
+                                    fill: true,
+                                    tension: 0.4,
+                                    pointRadius: 0,
+                                    pointHoverRadius: 6,
+                                    borderWidth: 2
+                                },
+                                {
+                                    label: 'Upper Bound',
+                                    data: [...Array(data.historical_dates.length).fill(null), ...data.forecast_upper],
+                                    borderColor: 'rgba(16, 185, 129, 0.0)',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.0)',
+                                    fill: false,
+                                    pointRadius: 0,
+                                    pointHoverRadius: 0
+                                },
+                                {
+                                    label: 'Lower Bound',
+                                    data: [...Array(data.historical_dates.length).fill(null), ...data.forecast_lower],
+                                    borderColor: 'rgba(16, 185, 129, 0.0)',
+                                    fill: '-1',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.1)', // Subtle glow area
+                                    pointRadius: 0,
+                                    pointHoverRadius: 0
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: { display: true, position: 'top', labels: { color: '#9ca3af', usePointStyle: true, boxWidth: 6 } },
+                                tooltip: {
+                                    backgroundColor: '#1f2937',
+                                    titleColor: '#f9fafb',
+                                    bodyColor: '#9ca3af',
+                                    borderColor: '#374151',
+                                    borderWidth: 1,
+                                    padding: 12,
+                                    displayColors: true,
+                                    callbacks: {
+                                        label: (context) => context.dataset.label + ': ₹' + context.parsed.y.toLocaleString('en-IN')
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    grid: { color: 'rgba(255,255,255,0.05)' },
+                                    ticks: { color: '#9ca3af', maxTicksLimit: 12, font: { size: 11 } }
+                                },
+                                y: {
+                                    grid: { color: 'rgba(255,255,255,0.05)' },
+                                    ticks: { color: '#9ca3af', font: { size: 11 } }
+                                }
+                            }
+                        }
+                    });
+
+                    // Populate table
+                    const tbody = document.querySelector('#forecastTable tbody');
+                    tbody.innerHTML = '';
+                    for (let i = 0; i < data.forecast_dates.length; i++) {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${data.forecast_dates[i]}</td>
+                            <td>₹${data.forecast_prices[i]}</td>
+                            <td>₹${data.forecast_lower[i]}</td>
+                            <td>₹${data.forecast_upper[i]}</td>
+                        `;
+                        tbody.appendChild(row);
+                    }
+
+                    document.getElementById('forecastContent').style.display = 'block';
+                } catch (err) {
+                    console.error(err);
+                    document.getElementById('forecastLoading').innerHTML = `<p class="error-text">Failed to generate forecast</p>`;
+                } finally {
+                    if (document.getElementById('forecastLoading').innerText.includes('Training')) {
+                        document.getElementById('forecastLoading').style.display = 'none';
+                    }
+                }
+            }
+
+            async function loadUptrends() {
+                document.getElementById('uptrendLoading').style.display = 'block';
+                document.getElementById('uptrendContent').style.display = 'none';
+
+                const minGain = document.getElementById('minGain').value || 1;
+                const maxGain = document.getElementById('maxGain').value || 200;
+
+                try {
+                    const response = await fetch(`/api/uptrends/${ticker}?min_gain=${minGain}&max_gain=${maxGain}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+
+                    const tbody = document.getElementById('uptrendTableBody');
+                    tbody.innerHTML = '';
+
+                    if (data.uptrends.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="7">No uptrends found matching filters (${minGain}% - ${maxGain}% gain)</td></tr>`;
+                    } else {
+                        data.uptrends.forEach((u, idx) => {
+                            const row = document.createElement('tr');
+                            row.innerHTML = `
+                                <td>${idx + 1}</td>
+                                <td>${u.start_date}</td>
+                                <td>${u.peak_date}</td>
+                                <td>${u.duration_months} months</td>
+                                <td>₹${u.start_price}</td>
+                                <td>₹${u.peak_price}</td>
+                                <td class="positive">+${u.gain}%</td>
+                            `;
+                            tbody.appendChild(row);
+                        });
+                    }
+
+                    document.getElementById('uptrendContent').style.display = 'block';
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    document.getElementById('uptrendLoading').style.display = 'none';
+                }
+            }
+
+            // Auto-load analysis
+            loadForecast();
+            // loadUptrends(); // Only forecast auto-loads to save initial load time, optional
+
+            async function loadSeasonality() {
+                document.getElementById('seasonalLoading').style.display = 'block';
+                document.getElementById('seasonalContent').style.display = 'none';
+
+                const minGain = document.getElementById('seasonalMinGain').value || 20;
+
+                try {
+                    const response = await fetch(`/api/seasonal/${ticker}?min_gain=${minGain}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+
+                    // 1. Populate Insights
+                    const insightsDiv = document.getElementById('seasonalInsights');
+                    if (data.insights && data.insights.length > 0) {
+                        insightsDiv.innerHTML = data.insights.map(i =>
+                            `<div class="stat-card" style="padding: 12px; margin-bottom: 8px; border-left: 4px solid var(--accent); background: var(--bg-hover);">
+                                <span style="font-size: 0.9rem; color: var(--text);">💡 ${i}</span>
+                            </div>`
+                        ).join('');
+                    } else {
+                        insightsDiv.innerHTML = '';
+                    }
+
+                    // 2. Populate Best Months Cards
+                    const bestGrid = document.getElementById('bestMonthsGrid');
+                    bestGrid.innerHTML = '';
+
+                    if (data.best_months.length === 0) {
+                        bestGrid.innerHTML = '<div class="empty-state">No significant patterns found with current filters.</div>';
+                    } else {
+                        data.best_months.forEach((m, idx) => {
+                            const isGold = idx === 0;
+                            const card = document.createElement('div');
+                            card.className = `season-card ${isGold ? 'gold' : ''}`;
+                            card.innerHTML = `
+                                <div class="season-header">
+                                    <span class="season-name">${m.month}</span>
+                                    <span class="badge" style="background: var(--bg-hover);">${m.occurrences} Rallies</span>
+                                </div>
+                                <div class="season-stats">
+                                    <div class="season-stat-item">
+                                        <span class="season-stat-label">Avg Gain</span>
+                                        <span class="season-stat-value highlight">+${m.avg_gain}%</span>
+                                    </div>
+                                    <div class="season-stat-item">
+                                        <span class="season-stat-label">Max Gain</span>
+                                        <span class="season-stat-value">+${m.max_gain}%</span>
+                                    </div>
+                                    <div class="season-stat-item">
+                                        <span class="season-stat-label">Avg Duration</span>
+                                        <span class="season-stat-value">${m.avg_duration} days</span>
+                                    </div>
+                                    <div class="season-stat-item">
+                                        <span class="season-stat-label">Success Rate</span>
+                                        <span class="season-stat-value">${m.success_rate}%</span>
+                                    </div>
+                                </div>
+                            `;
+                            bestGrid.appendChild(card);
+                        });
+                    }
+
+                    // 3. Populate Detailed Moves
+                    const movesBody = document.getElementById('seasonalMovesBody');
+                    movesBody.innerHTML = '';
+                    data.moves.forEach(move => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td><span class="badge" style="background: var(--bg-card);">${move.start_month}</span></td>
+                            <td>${move.low_date_str}</td>
+                            <td>${move.high_date_str}</td>
+                            <td>${move.duration}</td>
+                            <td class="positive">+${move.gain}%</td>
+                        `;
+                        movesBody.appendChild(row);
+                    });
+
+                    // 4. Populate Stats Table
+                    const statsBody = document.getElementById('seasonalStatsBody');
+                    statsBody.innerHTML = '';
+                    data.monthly_stats.forEach(stat => {
+                        const winRate = stat.success_rate;
+                        let winClass = '';
+                        if (winRate >= 50) winClass = 'positive';
+
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${stat.month}</td>
+                            <td>${stat.occurrences}</td>
+                            <td class="${stat.avg_gain > 0 ? 'positive' : ''}">${stat.avg_gain > 0 ? '+' : ''}${stat.avg_gain}%</td>
+                            <td class="${winClass}">${winRate}%</td>
+                         `;
+                        statsBody.appendChild(row);
+                    });
+
+                    document.getElementById('seasonalContent').style.display = 'block';
+
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    document.getElementById('seasonalLoading').style.display = 'none';
+                }
+            }
+        </script>
+        {% endif %}
+    </div>
+</body>
+
+</html>
