@@ -371,16 +371,20 @@ def get_seasonal_screener_data():
         updated_at = datetime.fromisoformat(cached_data.get('updated_at', '2000-01-01'))
         if datetime.now() - updated_at < timedelta(seconds=SEASONAL_CACHE_TTL):
             is_stale = False
+            # Even if fresh, if it has very few stocks, maybe it's a partial previous run
+            if len(cached_data.get('stocks', [])) < 10:
+                is_stale = True
 
-    # 3. Trigger background update if stale or missing
+    # 3. Trigger background update if stale or missing (and not already running)
     if is_stale:
-        print("Screener cache is stale or missing. Starting background update...")
-        threading.Thread(target=update_seasonal_cache, daemon=True).start()
+        # Check if a thread is already running for this (basic check)
+        is_running = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
+        if not is_running:
+            print("Screener cache is stale or missing. Starting background update...")
+            threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
 
     # 4. Return cached data if available (even if stale)
-    if cached_data:
-        # Filter logic if needed on server side, but here we return all and let frontend filter
-        # but the request asked for min_gain=7, so we might want to inform the frontend
+    if cached_data and cached_data.get('stocks'):
         return jsonify({
             'stocks': cached_data['stocks'],
             'total_analyzed': len(cached_data['stocks']),
@@ -390,13 +394,12 @@ def get_seasonal_screener_data():
         })
 
     # 5. If no cache exists at all, we HAVE to do a small sync run or return empty
-    # To avoid 502, let's return an empty list and say "calculating"
     return jsonify({
         'stocks': [],
         'total_analyzed': 0,
         'min_gain_filter': min_gain,
         'status': 'calculating',
-        'message': 'Initial analysis in progress. Please refresh in a few minutes.'
+        'message': 'Initial analysis in progress. This usually takes 2-5 minutes. Please refresh soon.'
     })
 
 def update_seasonal_cache():
@@ -416,13 +419,11 @@ def update_seasonal_cache():
             return
 
         results = []
-        # Use a higher min_gain for the "base" cache, or analyze with a low threshold
-        # and let the UI filter it. min_gain=10 is a good baseline.
-        base_min_gain = 10 
+        # Use a low base_min_gain (5%) for broad coverage in the cache
+        base_min_gain = 5  
         
         def analyze_stock(ticker):
             try:
-                # Remove .NS for analysis function if needed
                 clean_ticker = ticker.replace('.NS', '')
                 analysis = analyze_seasonal_patterns(clean_ticker, base_min_gain)
                 if 'error' not in analysis:
@@ -441,38 +442,43 @@ def update_seasonal_cache():
                         'monthly_stats': analysis['monthly_stats']
                     }
             except Exception as e:
-                # Silent fail for individual stocks to keep the batch moving
+                # Silently fail for individual stocks
                 pass
             return None
 
-        # Increase max_workers slightly since it's background
+        # Increase max_workers to 15 for faster processing if Railway allows
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            # Process more stocks in background - 150 for better coverage
-            futures = {executor.submit(analyze_stock, t): t for t in tickers[:150]}
-            for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                result = future.result()
-                if result:
-                    results.append(result)
-                if i % 10 == 0:
-                    print(f"Processed {i}/{len(futures)} stocks...")
-
-        # Sort by total rallies descending
-        results.sort(key=lambda x: x['total_rallies'], reverse=True)
-        
-        # Save to JSON
-        cache_content = {
-            'stocks': results,
-            'updated_at': datetime.now().isoformat(),
-            'total_tickers': len(tickers)
-        }
-        
-        with open(SEASONAL_CACHE_FILE, 'w') as f:
-            json.dump(cache_content, f)
+            # Process in small chunks to save progress
+            chunk_size = 20
+            all_tickers = tickers[:100]  # First 100 for now to be fast
             
-        print(f"Background update complete. {len(results)} stocks cached.")
+            for i in range(0, len(all_tickers), chunk_size):
+                chunk = all_tickers[i:i + chunk_size]
+                futures = {executor.submit(analyze_stock, t): t for t in chunk}
+                
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                
+                # Save partial results after each chunk
+                results.sort(key=lambda x: x['total_rallies'], reverse=True)
+                cache_content = {
+                    'stocks': results,
+                    'updated_at': datetime.now().isoformat(),
+                    'total_tickers': len(tickers),
+                    'in_progress': i + chunk_size < len(all_tickers)
+                }
+                
+                with open(SEASONAL_CACHE_FILE, 'w') as f:
+                    json.dump(cache_content, f)
+                
+                print(f"Incremental save: {len(results)} stocks cached so far...")
+
+        print(f"Background update complete. {len(results)} stocks total cached.")
         
     except Exception as e:
-        print(f"Error in update_seasonal_cache: {e}")
+        print(f"Critical error in update_seasonal_cache: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

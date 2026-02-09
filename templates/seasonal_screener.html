@@ -395,7 +395,18 @@
                 const response = await fetch(`/api/seasonal-screener?min_gain=${minGain}`);
                 const data = await response.json();
 
-                if (data.stocks) {
+                if (data.status === 'calculating') {
+                    document.getElementById('emptyState').innerHTML = `
+                        <h3>⚙️ Initial Analysis in Progress</h3>
+                        <p>${data.message}</p>
+                        <p style="font-size: 0.85rem; margin-top: 12px; color: var(--accent);">
+                            Please wait 1-2 minutes and refresh. We are currently processing the Nifty 250 stocks for you.
+                        </p>
+                    `;
+                    document.getElementById('emptyState').style.display = 'block';
+                    document.getElementById('resultsContainer').style.display = 'none';
+                    document.getElementById('statsContainer').style.display = 'none';
+                } else if (data.stocks && data.stocks.length > 0) {
                     allResults = data.stocks;
                     applyFiltersAndRender();
 
@@ -403,6 +414,17 @@
                     document.getElementById('statsContainer').style.display = 'flex';
                     document.getElementById('resultsContainer').style.display = 'block';
                     document.getElementById('emptyState').style.display = 'none';
+                    
+                    if (data.status === 'stale_updating') {
+                        // Optionally show a subtle "updating in background" toast
+                        console.log('Data is being refreshed in background...');
+                    }
+                } else {
+                    document.getElementById('emptyState').innerHTML = `
+                        <h3>📊 No Data Available</h3>
+                        <p>No stocks currently match the seasonal patterns with ${minGain}% gain. Try lowering the Min Gain filter.</p>
+                    `;
+                    document.getElementById('emptyState').style.display = 'block';
                 }
             } catch (error) {
                 console.error('Error:', error);
