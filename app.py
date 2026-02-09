@@ -6,6 +6,11 @@ import threading
 
 app = Flask(__name__)
 
+import os
+import json
+import threading
+from datetime import datetime, timedelta
+
 # Global cache
 CACHE = {
     "data": None,
@@ -14,6 +19,8 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
+SEASONAL_CACHE_FILE = 'seasonal_screener_cache.json'
+SEASONAL_CACHE_TTL = 86400  # 24 hours
 
 def get_market_data():
     """
@@ -345,68 +352,127 @@ def get_seasonal_screener_data():
     API to get seasonal analysis for all Nifty 250 stocks
     Returns aggregated data for filtering
     """
-    from seasonal_analysis import analyze_seasonal_patterns
     from flask import request
+    
+    min_gain = float(request.args.get('min_gain', 20))
+    
+    # 1. Try to load from JSON cache file
+    cached_data = None
+    if os.path.exists(SEASONAL_CACHE_FILE):
+        try:
+            with open(SEASONAL_CACHE_FILE, 'r') as f:
+                cached_data = json.load(f)
+        except Exception as e:
+            print(f"Error reading cache file: {e}")
+
+    # 2. Check if cache is stale or missing
+    is_stale = True
+    if cached_data:
+        updated_at = datetime.fromisoformat(cached_data.get('updated_at', '2000-01-01'))
+        if datetime.now() - updated_at < timedelta(seconds=SEASONAL_CACHE_TTL):
+            is_stale = False
+
+    # 3. Trigger background update if stale or missing
+    if is_stale:
+        print("Screener cache is stale or missing. Starting background update...")
+        threading.Thread(target=update_seasonal_cache, daemon=True).start()
+
+    # 4. Return cached data if available (even if stale)
+    if cached_data:
+        # Filter logic if needed on server side, but here we return all and let frontend filter
+        # but the request asked for min_gain=7, so we might want to inform the frontend
+        return jsonify({
+            'stocks': cached_data['stocks'],
+            'total_analyzed': len(cached_data['stocks']),
+            'min_gain_filter': min_gain,
+            'updated_at': cached_data['updated_at'],
+            'status': 'stale_updating' if is_stale else 'fresh'
+        })
+
+    # 5. If no cache exists at all, we HAVE to do a small sync run or return empty
+    # To avoid 502, let's return an empty list and say "calculating"
+    return jsonify({
+        'stocks': [],
+        'total_analyzed': 0,
+        'min_gain_filter': min_gain,
+        'status': 'calculating',
+        'message': 'Initial analysis in progress. Please refresh in a few minutes.'
+    })
+
+def update_seasonal_cache():
+    """
+    Background worker to refresh the seasonal screener data
+    """
+    print("Background update of seasonal cache started...")
+    from seasonal_analysis import analyze_seasonal_patterns
     import concurrent.futures
     import warnings
     warnings.filterwarnings('ignore')
     
-    # Get filter parameters
-    min_gain = float(request.args.get('min_gain', 20))
-    target_month = request.args.get('month', '')  # Optional: filter by month
-    
-    tickers = get_nifty250_tickers()
-    results = []
-    
-    def analyze_stock(ticker):
-        try:
-            analysis = analyze_seasonal_patterns(ticker.replace('.NS', ''), min_gain)
-            if 'error' not in analysis:
-                # Find best month data
-                best_month = analysis['best_months'][0] if analysis['best_months'] else None
-                
-                # Get total rallies across all months
-                total_rallies = sum(m['occurrences'] for m in analysis['monthly_stats'])
-                
-                # Get max success rate
-                max_success_rate = max((m['success_rate'] for m in analysis['monthly_stats']), default=0)
-                
-                # Get best month name
-                best_month_name = best_month['month'] if best_month else 'N/A'
-                best_month_rallies = best_month['occurrences'] if best_month else 0
-                best_month_avg_gain = best_month['avg_gain'] if best_month else 0
-                best_month_success = best_month['success_rate'] if best_month else 0
-                
-                return {
-                    'ticker': ticker.replace('.NS', ''),
-                    'total_rallies': total_rallies,
-                    'best_month': best_month_name,
-                    'best_month_rallies': best_month_rallies,
-                    'best_month_avg_gain': best_month_avg_gain,
-                    'best_month_success': best_month_success,
-                    'max_success_rate': max_success_rate,
-                    'monthly_stats': analysis['monthly_stats']
-                }
-        except Exception as e:
-            print(f"Error analyzing {ticker}: {e}")
-        return None
-    
-    # Process stocks in parallel (limit concurrency to avoid rate limits)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(analyze_stock, t): t for t in tickers[:50]}  # Limit to 50 for now
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                results.append(result)
-    
-    # Sort by total rallies descending
-    results.sort(key=lambda x: x['total_rallies'], reverse=True)
-    
-    return jsonify({
-        'stocks': results,
-        'total_analyzed': len(results),
-        'min_gain_filter': min_gain
-    })
+    try:
+        tickers = get_nifty250_tickers()
+        if not tickers:
+            print("Failed to fetch tickers for background update")
+            return
+
+        results = []
+        # Use a higher min_gain for the "base" cache, or analyze with a low threshold
+        # and let the UI filter it. min_gain=10 is a good baseline.
+        base_min_gain = 10 
+        
+        def analyze_stock(ticker):
+            try:
+                # Remove .NS for analysis function if needed
+                clean_ticker = ticker.replace('.NS', '')
+                analysis = analyze_seasonal_patterns(clean_ticker, base_min_gain)
+                if 'error' not in analysis:
+                    best_month = analysis['best_months'][0] if analysis['best_months'] else None
+                    total_rallies = sum(m['occurrences'] for m in analysis['monthly_stats'])
+                    max_success_rate = max((m['success_rate'] for m in analysis['monthly_stats']), default=0)
+                    
+                    return {
+                        'ticker': clean_ticker,
+                        'total_rallies': total_rallies,
+                        'best_month': best_month['month'] if best_month else 'N/A',
+                        'best_month_rallies': best_month['occurrences'] if best_month else 0,
+                        'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
+                        'best_month_success': best_month['success_rate'] if best_month else 0,
+                        'max_success_rate': max_success_rate,
+                        'monthly_stats': analysis['monthly_stats']
+                    }
+            except Exception as e:
+                # Silent fail for individual stocks to keep the batch moving
+                pass
+            return None
+
+        # Increase max_workers slightly since it's background
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            # Process more stocks in background - 150 for better coverage
+            futures = {executor.submit(analyze_stock, t): t for t in tickers[:150]}
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                result = future.result()
+                if result:
+                    results.append(result)
+                if i % 10 == 0:
+                    print(f"Processed {i}/{len(futures)} stocks...")
+
+        # Sort by total rallies descending
+        results.sort(key=lambda x: x['total_rallies'], reverse=True)
+        
+        # Save to JSON
+        cache_content = {
+            'stocks': results,
+            'updated_at': datetime.now().isoformat(),
+            'total_tickers': len(tickers)
+        }
+        
+        with open(SEASONAL_CACHE_FILE, 'w') as f:
+            json.dump(cache_content, f)
+            
+        print(f"Background update complete. {len(results)} stocks cached.")
+        
+    except Exception as e:
+        print(f"Error in update_seasonal_cache: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
