@@ -5,3 +5,6 @@ __pycache__/
 .DS_Store
 .env
 seasonal_screener_cache.json
+analytics_cache/
+test_performance.py
+test_screener_api.py

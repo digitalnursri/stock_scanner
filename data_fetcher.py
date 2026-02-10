@@ -72,9 +72,12 @@ def get_realtime_data(tickers):
         return pd.DataFrame()
 
     # Fetch Market Caps in parallel
-    print(f"Fetching Market Caps for {len(tickers)} stocks (this might take 10-20s)...")
+    print(f"Fetching Market Caps for {len(tickers)} stocks...")
     market_caps = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    
+    # yfinance Tickers object can be used to get info for multiple stocks
+    # however, we'll stick to ThreadPoolExecutor but increase workers and handle it slightly better
+    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
         future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
         for future in concurrent.futures.as_completed(future_to_ticker):
             ticker = future_to_ticker[future]

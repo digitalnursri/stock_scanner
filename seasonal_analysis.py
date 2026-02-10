@@ -14,12 +14,21 @@ def analyze_seasonal_patterns(ticker, min_gain_percent=20):
     Returns:
         dict: containing 'moves', 'monthly_stats', 'best_months', 'insights'
     """
+    return analyze_seasonal_patterns_v2(ticker, min_gain_percent)
+
+def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
+    """
+    Analyzes seasonal patterns, optionally using pre-fetched data.
+    """
     full_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
     
     try:
-        # 1. Fetch Data (10 Years daily)
-        stock = yf.Ticker(full_ticker)
-        hist = stock.history(period="10y", interval="1d")
+        # 1. Fetch Data if not provided
+        if hist_data is None:
+            stock = yf.Ticker(full_ticker)
+            hist = stock.history(period="10y", interval="1d")
+        else:
+            hist = hist_data
         
         if hist.empty or len(hist) < 250:
             return {'error': 'Insufficient historical data'}

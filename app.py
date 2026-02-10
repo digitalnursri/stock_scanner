@@ -21,31 +21,62 @@ CACHE = {
 CACHE_DURATION = 300  # 5 minutes
 SEASONAL_CACHE_FILE = 'seasonal_screener_cache.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
+ANALYTICS_CACHE_DIR = 'analytics_cache'
+
+# Ensure analytics cache dir exists
+if not os.path.exists(ANALYTICS_CACHE_DIR):
+    os.makedirs(ANALYTICS_CACHE_DIR)
+
+def get_analytics_cache(ticker, category):
+    """Simple file-based cache for expensive analytics"""
+    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}.json")
+    if os.path.exists(cache_path):
+        mtime = os.path.getmtime(cache_path)
+        if (time.time() - mtime) < SEASONAL_CACHE_TTL:
+            try:
+                with open(cache_path, 'r') as f:
+                    return json.load(f)
+            except:
+                pass
+    return None
+
+def save_analytics_cache(ticker, category, data):
+    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}.json")
+    try:
+        with open(cache_path, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
 
 def get_market_data():
     """
     Fetches data from source or cache.
     """
-    current_time = time.time()
-    
     with CACHE["lock"]:
-        if CACHE["data"] is not None and (current_time - CACHE["last_updated"] < CACHE_DURATION):
+        if CACHE["data"] is not None:
+            # If data is stale, trigger background update but return stale data
+            if (time.time() - CACHE["last_updated"] > CACHE_DURATION):
+                is_running = any(t.name == "MainCacheUpdater" for t in threading.enumerate())
+                if not is_running:
+                    threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
             return CACHE["data"]
             
-    # Fetch new data
-    # print("Cache expired or empty. Fetching new data...")
+    # Initial fetch if cache is empty
+    return refresh_main_cache()
+
+def refresh_main_cache():
+    """Synchronous cache refresh for initial load or background thread"""
+    # print("Refreshing main cache...")
     tickers = get_nifty250_tickers()
     df = get_realtime_data(tickers)
     
     if not df.empty:
-        # Sort by Price descending for now, or alphabetical
         df = df.sort_values(by='Ticker')
         data = df.to_dict(orient='records')
         
         with CACHE["lock"]:
             CACHE["data"] = data
-            CACHE["last_updated"] = current_time
-            
+            CACHE["last_updated"] = time.time()
         return data
     return []
 
@@ -176,6 +207,11 @@ def get_forecast(ticker):
     full_ticker = f"{ticker}.NS"
     
     try:
+        # Check cache
+        cached = get_analytics_cache(ticker, 'forecast')
+        if cached:
+            return jsonify(cached)
+
         stock = yf.Ticker(full_ticker)
         hist = stock.history(period="10y", interval="1mo")
         
@@ -217,7 +253,7 @@ def get_forecast(ticker):
         hist_dates = df['ds'].dt.strftime('%b %Y').tolist()
         hist_prices = df['y'].round(2).tolist()
         
-        return jsonify({
+        result = {
             'historical_dates': hist_dates,
             'historical_prices': hist_prices,
             'forecast_dates': forecast_dates,
@@ -228,7 +264,9 @@ def get_forecast(ticker):
             'current_price': round(hist_prices[-1], 2),
             'forecast_12m': round(forecast_prices[-1], 2),
             'expected_return': round(((forecast_prices[-1] - hist_prices[-1]) / hist_prices[-1]) * 100, 2)
-        })
+        }
+        save_analytics_cache(ticker, 'forecast', result)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)})
 
@@ -320,7 +358,14 @@ def get_seasonal_analysis(ticker):
     from flask import request
     min_gain = float(request.args.get('min_gain', 20)) 
     
+    # Check cache
+    cached = get_analytics_cache(ticker, 'seasonal')
+    if cached:
+        return jsonify(cached)
+        
     result = analyze_seasonal_patterns(ticker, min_gain)
+    if 'error' not in result:
+        save_analytics_cache(ticker, 'seasonal', result)
     return jsonify(result)
 
 @app.route('/api/predictions/<ticker>')
@@ -336,7 +381,14 @@ def get_predictions(ticker):
     min_gain = float(request.args.get('min_gain', 20))
     min_success_rate = float(request.args.get('min_success_rate', 80))
     
+    # Check cache
+    cached = get_analytics_cache(ticker, 'predictions')
+    if cached:
+        return jsonify(cached)
+        
     result = predict_future_dates(ticker, min_gain, min_success_rate)
+    if 'error' not in result:
+        save_analytics_cache(ticker, 'predictions', result)
     return jsonify(result)
 
 @app.route('/seasonal-screener')
@@ -419,49 +471,56 @@ def update_seasonal_cache():
             return
 
         results = []
-        # Use a low base_min_gain (5%) for broad coverage in the cache
         base_min_gain = 5  
         
-        def analyze_stock(ticker):
-            try:
-                clean_ticker = ticker.replace('.NS', '')
-                analysis = analyze_seasonal_patterns(clean_ticker, base_min_gain)
-                if 'error' not in analysis:
-                    best_month = analysis['best_months'][0] if analysis['best_months'] else None
-                    total_rallies = sum(m['occurrences'] for m in analysis['monthly_stats'])
-                    max_success_rate = max((m['success_rate'] for m in analysis['monthly_stats']), default=0)
-                    
-                    return {
-                        'ticker': clean_ticker,
-                        'total_rallies': total_rallies,
-                        'best_month': best_month['month'] if best_month else 'N/A',
-                        'best_month_rallies': best_month['occurrences'] if best_month else 0,
-                        'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
-                        'best_month_success': best_month['success_rate'] if best_month else 0,
-                        'max_success_rate': max_success_rate,
-                        'monthly_stats': analysis['monthly_stats']
-                    }
-            except Exception as e:
-                # Silently fail for individual stocks
-                pass
-            return None
-
-        # Increase max_workers to 15 for faster processing if Railway allows
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            # Process in small chunks to save progress
-            chunk_size = 20
-            all_tickers = tickers[:100]  # First 100 for now to be fast
+        # Batch process tickers to avoid memory issues while benefiting from batch download
+        chunk_size = 20
+        all_tickers = tickers # Process all 250 now
+        
+        for i in range(0, len(all_tickers), chunk_size):
+            chunk = all_tickers[i:i + chunk_size]
+            print(f"Processing chunk {i//chunk_size + 1}: {chunk[0]} to {chunk[-1]}")
             
-            for i in range(0, len(all_tickers), chunk_size):
-                chunk = all_tickers[i:i + chunk_size]
-                futures = {executor.submit(analyze_stock, t): t for t in chunk}
+            try:
+                # Batch download 10y daily data for the chunk
+                # Using group_by='ticker' to get a multi-index dataframe
+                data = yf.download(chunk, period="10y", interval="1d", group_by='ticker', progress=False)
                 
-                for future in concurrent.futures.as_completed(futures):
-                    result = future.result()
-                    if result:
-                        results.append(result)
+                for ticker in chunk:
+                    try:
+                        clean_ticker = ticker.replace('.NS', '')
+                        # Extract ticker data from batch
+                        if isinstance(data.columns, pd.MultiIndex):
+                            hist = data[ticker].dropna(how='all')
+                        else:
+                            hist = data.dropna(how='all')
+                            
+                        if hist.empty:
+                            continue
+                            
+                        from seasonal_analysis import analyze_seasonal_patterns_v2
+                        analysis = analyze_seasonal_patterns_v2(clean_ticker, base_min_gain, hist_data=hist)
+                        
+                        if 'error' not in analysis:
+                            best_month = analysis['best_months'][0] if analysis['best_months'] else None
+                            total_rallies = sum(m['occurrences'] for m in analysis['monthly_stats'])
+                            max_success_rate = max((m['success_rate'] for m in analysis['monthly_stats']), default=0)
+                            
+                            results.append({
+                                'ticker': clean_ticker,
+                                'total_rallies': total_rallies,
+                                'best_month': best_month['month'] if best_month else 'N/A',
+                                'best_month_rallies': best_month['occurrences'] if best_month else 0,
+                                'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
+                                'best_month_success': best_month['success_rate'] if best_month else 0,
+                                'max_success_rate': max_success_rate,
+                                'monthly_stats': analysis['monthly_stats']
+                            })
+                    except Exception as e:
+                        # print(f"Error processing {ticker}: {e}")
+                        pass
                 
-                # Save partial results after each chunk
+                # Incremental save
                 results.sort(key=lambda x: x['total_rallies'], reverse=True)
                 cache_content = {
                     'stocks': results,
@@ -472,8 +531,10 @@ def update_seasonal_cache():
                 
                 with open(SEASONAL_CACHE_FILE, 'w') as f:
                     json.dump(cache_content, f)
-                
-                print(f"Incremental save: {len(results)} stocks cached so far...")
+                    
+            except Exception as e:
+                print(f"Error in batch download/process: {e}")
+                continue
 
         print(f"Background update complete. {len(results)} stocks total cached.")
         
