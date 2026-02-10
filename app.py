@@ -27,9 +27,13 @@ ANALYTICS_CACHE_DIR = 'analytics_cache'
 if not os.path.exists(ANALYTICS_CACHE_DIR):
     os.makedirs(ANALYTICS_CACHE_DIR)
 
-def get_analytics_cache(ticker, category):
+def get_analytics_cache(ticker, category, params=None):
     """Simple file-based cache for expensive analytics"""
-    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}.json")
+    suffix = ""
+    if params:
+        suffix = "_" + "_".join([f"{k}{v}" for k, v in sorted(params.items())])
+    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}{suffix}.json")
+    
     if os.path.exists(cache_path):
         mtime = os.path.getmtime(cache_path)
         if (time.time() - mtime) < SEASONAL_CACHE_TTL:
@@ -40,8 +44,11 @@ def get_analytics_cache(ticker, category):
                 pass
     return None
 
-def save_analytics_cache(ticker, category, data):
-    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}.json")
+def save_analytics_cache(ticker, category, data, params=None):
+    suffix = ""
+    if params:
+        suffix = "_" + "_".join([f"{k}{v}" for k, v in sorted(params.items())])
+    cache_path = os.path.join(ANALYTICS_CACHE_DIR, f"{ticker}_{category}{suffix}.json")
     try:
         with open(cache_path, 'w') as f:
             json.dump(data, f)
@@ -357,15 +364,16 @@ def get_seasonal_analysis(ticker):
     # Get filter parameters
     from flask import request
     min_gain = float(request.args.get('min_gain', 20)) 
+    params = {'min_gain': min_gain}
     
     # Check cache
-    cached = get_analytics_cache(ticker, 'seasonal')
+    cached = get_analytics_cache(ticker, 'seasonal', params)
     if cached:
         return jsonify(cached)
         
     result = analyze_seasonal_patterns(ticker, min_gain)
     if 'error' not in result:
-        save_analytics_cache(ticker, 'seasonal', result)
+        save_analytics_cache(ticker, 'seasonal', result, params)
     return jsonify(result)
 
 @app.route('/api/predictions/<ticker>')
@@ -380,15 +388,16 @@ def get_predictions(ticker):
     
     min_gain = float(request.args.get('min_gain', 20))
     min_success_rate = float(request.args.get('min_success_rate', 80))
+    params = {'min_gain': min_gain, 'min_success_rate': min_success_rate}
     
     # Check cache
-    cached = get_analytics_cache(ticker, 'predictions')
+    cached = get_analytics_cache(ticker, 'predictions', params)
     if cached:
         return jsonify(cached)
         
     result = predict_future_dates(ticker, min_gain, min_success_rate)
     if 'error' not in result:
-        save_analytics_cache(ticker, 'predictions', result)
+        save_analytics_cache(ticker, 'predictions', result, params)
     return jsonify(result)
 
 @app.route('/seasonal-screener')
