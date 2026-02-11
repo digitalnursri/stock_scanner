@@ -19,7 +19,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
-SEASONAL_CACHE_FILE = 'seasonal_cache_v2.json'
+SEASONAL_CACHE_FILE = 'seasonal_cache_v3.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
 
