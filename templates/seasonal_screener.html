@@ -243,6 +243,13 @@
             margin-bottom: 8px;
         }
 
+        .filter-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+            font-style: italic;
+        }
+
         @media (max-width: 768px) {
             .screener-filters {
                 width: 100%;
@@ -324,6 +331,10 @@
                 <button class="btn-analyze" id="analyzeBtn" onclick="loadScreenerData()">
                     🔍 Analyze Stocks
                 </button>
+            </div>
+            <div class="filter-hint">
+                💡 Tip: "Min Rallies" counts how many times a stock rose in the last 10 years. If you set it to 10, only
+                100% success stocks will show.
             </div>
         </div>
 
@@ -414,7 +425,7 @@
                     document.getElementById('statsContainer').style.display = 'flex';
                     document.getElementById('resultsContainer').style.display = 'block';
                     document.getElementById('emptyState').style.display = 'none';
-                    
+
                     if (data.status === 'stale_updating') {
                         // Optionally show a subtle "updating in background" toast
                         console.log('Data is being refreshed in background...');
@@ -443,54 +454,83 @@
         }
 
         function applyFiltersAndRender() {
-            const monthFilter = document.getElementById('monthFilter').value;
-            const minRalliesInput = document.getElementById('minRalliesFilter').value;
-            const minRallies = minRalliesInput ? parseInt(minRalliesInput, 10) : 0;
-            const minSuccessRate = parseInt(document.getElementById('successRateFilter').value, 10) || 0;
+            const minGain = parseFloat(document.getElementById('minGainFilter').value) || 20;
+            const selectedMonthStr = document.getElementById('monthFilter').value; // "January" to "December" or ""
+            const minRallies = parseInt(document.getElementById('minRalliesFilter').value) || 0;
+            const minSuccessRate = parseInt(document.getElementById('successRateFilter').value) || 0;
 
-            // Build display data: when a specific month is selected, use THAT month's stats
-            let displayData = [];
+            const tableBody = document.getElementById('resultsBody'); // Changed from screenerTableBody
+            tableBody.innerHTML = '';
 
-            allResults.forEach(stock => {
-                if (monthFilter) {
-                    // A specific month is selected — use that month's stats
-                    const mStats = getMonthStats(stock, monthFilter);
-                    if (!mStats || mStats.occurrences === 0) return; // Skip if no rallies in this month
+            let matchCount = 0;
 
-                    // Apply filters against selected month's data
-                    if (mStats.occurrences < minRallies) return;
-                    if (mStats.success_rate < minSuccessRate) return;
+            // Map "1" -> "January", etc. (This part is not needed if selectedMonthStr is already month name)
+            // const monthNames = ["January", "February", "March", "April", "May", "June", 
+            //                     "July", "August", "September", "October", "November", "December"];
 
-                    displayData.push({
-                        ticker: stock.ticker,
-                        total_rallies: stock.total_rallies,
-                        display_month: monthFilter,
-                        display_rallies: mStats.occurrences,
-                        display_avg_gain: mStats.avg_gain,
-                        display_success: mStats.success_rate,
-                        // Keep sortable fields
-                        month_rallies: mStats.occurrences,
-                        avg_gain: mStats.avg_gain,
-                        success_rate: mStats.success_rate
-                    });
-                } else {
-                    // "All Months" — use the best month data (original behavior)
-                    if (stock.best_month_rallies < minRallies) return;
-                    if (stock.max_success_rate < minSuccessRate) return;
+            let targetMonthName = null;
+            if (selectedMonthStr !== '') { // Changed from 'all' to '' for "All Months" option
+                targetMonthName = selectedMonthStr; // Use the month name directly
+            }
 
-                    displayData.push({
-                        ticker: stock.ticker,
-                        total_rallies: stock.total_rallies,
-                        display_month: stock.best_month,
-                        display_rallies: stock.best_month_rallies,
-                        display_avg_gain: stock.best_month_avg_gain,
-                        display_success: stock.best_month_success,
-                        // Keep sortable fields
-                        month_rallies: stock.best_month_rallies,
+            let displayData = []; // New array to hold filtered and processed data for sorting
+
+            allResults.forEach(stock => { // Changed from allStocksData to allResults
+                // 1. Determine which stats to evaluate (Best Month vs Selected Month)
+                let displayStats = {};
+
+                if (selectedMonthStr === '') { // Changed from 'all' to ''
+                    // Use BEST MONTH stats
+                    // The backend already provides best_month, best_month_rallies, etc.
+                    displayStats = {
+                        month: stock.best_month,
+                        occurrences: stock.best_month_rallies,
                         avg_gain: stock.best_month_avg_gain,
                         success_rate: stock.best_month_success
-                    });
+                    };
+                } else {
+                    // Use SELECTED MONTH stats
+                    // Find the specific month in monthly_stats
+                    const monthData = stock.monthly_stats.find(m => m.month === targetMonthName);
+
+                    if (monthData) {
+                        displayStats = monthData;
+                    } else {
+                        // Month exists in list? If not found, it implies 0 stats
+                        displayStats = {
+                            month: targetMonthName, occurrences: 0, avg_gain: 0, success_rate: 0
+                        };
+                    }
                 }
+
+                // 2. Apply Filters
+                // Min Gain is already filtered by backend API params mostly, but we double check if needed? 
+                // Actually stock list from API is for a specific min_gain. 
+                // But we can filter again if we want, though usually not needed.
+
+                // Min Rallies (Occurrences)
+                if (displayStats.occurrences < minRallies) return;
+
+                // Success Rate
+                if (displayStats.success_rate < minSuccessRate) return;
+
+                // If specific month selected, we only show if it actually has data? 
+                // Or do we show 0? Usually we want "matching" stocks, so 0 occurrences implies no match.
+                if (selectedMonthStr !== '' && displayStats.occurrences === 0) return; // Changed from 'all' to ''
+
+                // Add to displayData for sorting
+                displayData.push({
+                    ticker: stock.ticker,
+                    total_rallies: stock.total_rallies, // Assuming total_rallies is still relevant for sorting
+                    display_month: displayStats.month,
+                    display_rallies: displayStats.occurrences,
+                    display_avg_gain: displayStats.avg_gain,
+                    display_success: displayStats.success_rate,
+                    // Fields for sorting
+                    month_rallies: displayStats.occurrences,
+                    avg_gain: displayStats.avg_gain,
+                    success_rate: displayStats.success_rate
+                });
             });
 
             // Sort

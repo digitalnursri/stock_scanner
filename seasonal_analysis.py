@@ -40,7 +40,11 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         # FORCE SORT by Date (oldest first)
         df = df.sort_values('Date', ascending=True).reset_index(drop=True)
         
+        # Total years in dataset for Success Rate calculation
+        total_years_analyzed = df['Date'].dt.year.nunique()
+        
         moves = []
+        moves_by_month = {}
         
         # Convert to Python lists for faster iteration
         dates_list = df['Date'].tolist()  # These are now pd.Timestamp objects
@@ -76,43 +80,31 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
                 if duration_days <= 0:
                     continue
                 
-                # Check for duplicates (overlapping moves to same peak)
-                is_duplicate = False
-                for existing in moves:
-                    existing_high = existing['high_date']
-                    existing_low = existing['low_date']
-                    
-                    high_diff = abs((existing_high - end_date).days)
-                    low_diff = abs((existing_low - start_date).days)
-                    
-                    if high_diff < 10 and low_diff < 20:
-                        is_duplicate = True
-                        # Keep the one with lower start price (better entry)
-                        # But ONLY if the new move is valid (start before end)
-                        if start_price < existing['start_price'] and start_date < end_date:
-                            # Update all related fields consistently
-                            existing['start_price'] = start_price
-                            existing['low_date'] = start_date
-                            existing['high_date'] = end_date  # Also update high_date!
-                            existing['gain'] = round(float(max_gain), 2)
-                            existing['duration'] = (end_date - start_date).days  # Recalculate!
-                            existing['start_month'] = start_date.strftime('%B')
-                            existing['start_month_idx'] = start_date.month
-                            existing['start_year'] = start_date.year
-                        break
+                # Group potential moves by (Year, Month)
+                month_key = (start_date.year, start_date.month)
                 
-                if not is_duplicate:
-                    moves.append({
-                        'low_date': start_date,
-                        'high_date': end_date,
-                        'start_price': start_price,
-                        'end_price': highs[best_day_idx],
-                        'gain': round(float(max_gain), 2),
-                        'duration': duration_days,
-                        'start_month': start_date.strftime('%B'),
-                        'start_month_idx': start_date.month,
-                        'start_year': start_date.year
-                    })
+                if month_key not in moves_by_month:
+                    moves_by_month[month_key] = []
+                
+                moves_by_month[month_key].append({
+                    'low_date': start_date,
+                    'high_date': end_date,
+                    'start_price': start_price,
+                    'end_price': highs[best_day_idx],
+                    'gain': round(float(max_gain), 2),
+                    'duration': duration_days,
+                    'start_month': start_date.strftime('%B'),
+                    'start_month_idx': start_date.month,
+                    'start_year': start_date.year
+                })
+
+        # Process the grouped moves: Keep ONLY the BEST move per month-year
+        moves = []
+        for key, month_moves in moves_by_month.items():
+            # Sort by gain (descending) so we pick the best one
+            month_moves.sort(key=lambda x: x['gain'], reverse=True)
+            best_move = month_moves[0]
+            moves.append(best_move)
         
         # Sort moves by date
         moves.sort(key=lambda x: x['low_date'])
@@ -161,7 +153,9 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
             # Success Rate = (Years with at least 1 rally / Total Years) * 100
             # Cap at 100%
             num_years = len(stats['years_with_rally'])
-            success_rate = min((num_years / 10) * 100, 100)
+            # Use dynamic denominator if total_years_analyzed > 0
+            denom = total_years_analyzed if total_years_analyzed > 0 else 10
+            success_rate = min((num_years / denom) * 100, 100)
             
             formatted_stats.append({
                 'month': m_name,
