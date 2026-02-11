@@ -243,6 +243,13 @@
             margin-bottom: 8px;
         }
 
+        .effective-threshold {
+            font-size: 0.8rem;
+            color: var(--accent);
+            margin-top: 4px;
+            font-weight: 500;
+        }
+
         .filter-hint {
             font-size: 0.75rem;
             color: var(--text-muted);
@@ -333,6 +340,7 @@
                 </button>
             </div>
             <div class="filter-hint">
+                <div id="effectiveThreshold" class="effective-threshold"></div>
                 💡 Tip: "Min Rallies" counts how many times a stock rose in the last 10 years. If you set it to 10, only
                 100% success stocks will show.
             </div>
@@ -425,6 +433,13 @@
                     document.getElementById('statsContainer').style.display = 'flex';
                     document.getElementById('resultsContainer').style.display = 'block';
                     document.getElementById('emptyState').style.display = 'none';
+
+                    if (data.matched_threshold) {
+                        document.getElementById('effectiveThreshold').textContent =
+                            `Matched to closest pre-calculated tier: > ${data.matched_threshold}% Gain`;
+                    } else {
+                        document.getElementById('effectiveThreshold').textContent = '';
+                    }
 
                     if (data.status === 'stale_updating') {
                         // Optionally show a subtle "updating in background" toast

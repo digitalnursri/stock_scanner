@@ -463,8 +463,8 @@ def get_seasonal_screener_data():
         matched_threshold = None
         
         if 'stocks_by_gain' in cached_data:
-            # Match min_gain to closest available threshold (10, 15, 20, 25)
-            thresholds = [10, 15, 20, 25]
+            # Match min_gain to closest available threshold (10, 15, 20, 25, 30, 40, 50, 75, 100)
+            thresholds = [10, 15, 20, 25, 30, 40, 50, 75, 100]
             # Find the closest threshold that is >= min_gain, or the smallest available
             matched_threshold = 20 # Default
             higher_thresholds = [t for t in thresholds if t >= min_gain]
@@ -513,7 +513,8 @@ def update_seasonal_cache():
             print("Failed to fetch tickers for background update")
             return
 
-        results_by_gain = {threshold: [] for threshold in [10, 15, 20, 25]}
+        target_thresholds = [10, 15, 20, 25, 30, 40, 50, 75, 100]
+        results_by_gain = {threshold: [] for threshold in target_thresholds}
         
         # Batch process tickers to avoid memory issues while benefiting from batch download
         chunk_size = 20
@@ -542,7 +543,7 @@ def update_seasonal_cache():
                         from seasonal_analysis import analyze_seasonal_patterns_v2
                         
                         # Calculate for each threshold
-                        for threshold in [10, 15, 20, 25]:
+                        for threshold in target_thresholds:
                             analysis = analyze_seasonal_patterns_v2(clean_ticker, threshold, hist_data=hist)
                             
                             if 'error' not in analysis:
