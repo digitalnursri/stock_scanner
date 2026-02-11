@@ -457,7 +457,8 @@ def get_seasonal_screener_data():
             print("Screener cache is stale or missing. Starting background update...")
             threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
 
-        # Determine which list to return
+    # 4. Determine which list to return (Fresh or Stale)
+    if cached_data:
         stocks = []
         matched_threshold = None
         
@@ -486,7 +487,7 @@ def get_seasonal_screener_data():
                 'status': 'stale_updating' if is_stale else 'fresh'
             })
 
-    # 5. If no cache exists at all, we HAVE to do a small sync run or return empty
+    # 5. If no cache exists at all
     return jsonify({
         'stocks': [],
         'total_analyzed': 0,
