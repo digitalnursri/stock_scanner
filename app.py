@@ -429,11 +429,24 @@ def get_seasonal_screener_data():
     # 2. Check if cache is stale or missing
     is_stale = True
     if cached_data:
-        updated_at = datetime.fromisoformat(cached_data.get('updated_at', '2000-01-01'))
+        updated_at_str = cached_data.get('updated_at', '2000-01-01')
+        updated_at = datetime.fromisoformat(updated_at_str)
         if datetime.now() - updated_at < timedelta(seconds=SEASONAL_CACHE_TTL):
             is_stale = False
-            # Even if fresh, if it has very few stocks, maybe it's a partial previous run
-            if len(cached_data.get('stocks', [])) < 10:
+            
+            # Count total stocks in any threshold to see if it's a valid cache
+            has_data = False
+            if 'stocks_by_gain' in cached_data:
+                # Check if any threshold has stocks
+                for t in cached_data['stocks_by_gain']:
+                    if len(cached_data['stocks_by_gain'][t]) > 0:
+                        has_data = True
+                        break
+            elif 'stocks' in cached_data:
+                if len(cached_data['stocks']) > 0:
+                    has_data = True
+            
+            if not has_data:
                 is_stale = True
 
     # 3. Trigger background update if stale or missing (and not already running)
@@ -444,23 +457,23 @@ def get_seasonal_screener_data():
             print("Screener cache is stale or missing. Starting background update...")
             threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
 
-    # 4. Return cached data if available (even if stale)
-    if cached_data:
+        # Determine which list to return
         stocks = []
+        matched_threshold = None
+        
         if 'stocks_by_gain' in cached_data:
             # Match min_gain to closest available threshold (10, 15, 20, 25)
             thresholds = [10, 15, 20, 25]
-            # Find the closest threshold that is <= min_gain, or the smallest available
+            # Find the closest threshold that is >= min_gain, or the smallest available
             matched_threshold = 20 # Default
             higher_thresholds = [t for t in thresholds if t >= min_gain]
             if higher_thresholds:
                 matched_threshold = min(higher_thresholds)
             else:
                 matched_threshold = max(thresholds)
-                
+            
             stocks = cached_data['stocks_by_gain'].get(str(matched_threshold), [])
         elif 'stocks' in cached_data:
-            # Fallback for old cache format
             stocks = cached_data['stocks']
 
         if stocks:
@@ -468,7 +481,7 @@ def get_seasonal_screener_data():
                 'stocks': stocks,
                 'total_analyzed': len(stocks),
                 'min_gain_filter': min_gain,
-                'matched_threshold': matched_threshold if 'stocks_by_gain' in cached_data else None,
+                'matched_threshold': matched_threshold,
                 'updated_at': cached_data['updated_at'],
                 'status': 'stale_updating' if is_stale else 'fresh'
             })
