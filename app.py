@@ -463,12 +463,12 @@ def get_seasonal_screener_data():
             # Filter moves by exact threshold requested by user
             filtered_moves = [m for m in all_moves if m['gain'] >= min_gain]
             
-            # ALSO calculate the other direction for risk/reward context
+            # ALSO calculate the other direction (risk profile) for that month
+            # We DONT filter this as strictly as the primary trend so we see all historical dips > 5%
             if direction == 'loss':
-                other_moves_list = stock.get('all_moves', [])
+                other_filtered = stock.get('all_moves', [])
             else:
-                other_moves_list = stock.get('fall_moves', [])
-            other_filtered = [m for m in other_moves_list if m['gain'] >= min_gain]
+                other_filtered = stock.get('fall_moves', [])
             
             # Re-calculate monthly stats for this specific min_gain/direction
             monthly_stats_map = {m: {

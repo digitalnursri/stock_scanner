@@ -562,6 +562,7 @@
                     // The backend already provides best_month, best_month_rallies, etc.
                     displayStats = {
                         month: stock.best_month,
+                        occurrences: stock.best_month_rallies,
                         avg_gain: stock.best_month_avg_gain,
                         min_gain: stock.best_month_min_gain, // Matches backend name
                         // Drawdown/Recovery columns now prioritize Cross-Trend stats for better risk awareness

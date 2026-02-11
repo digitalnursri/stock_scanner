@@ -4,8 +4,8 @@ import json
 def verify_kei_cross_trend():
     print("--- Verifying KEI Cross-Trend Risk Metrics ---")
     
-    # Target: KEI in March, Gain Mode, Min Gain 9%
-    url = "http://localhost:5000/api/seasonal-screener?min_gain=9&direction=gain"
+    # Target: KEI in March, Gain Mode, Min Gain 20%
+    url = "http://localhost:5000/api/seasonal-screener?min_gain=20&direction=gain"
     
     try:
         response = requests.get(url)
