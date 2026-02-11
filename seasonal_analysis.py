@@ -45,6 +45,7 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         
         moves = []
         moves_by_month = {}
+        fall_moves_by_month = {}
         
         # Convert to Python lists for faster iteration
         dates_list = df['Date'].tolist()  # These are now pd.Timestamp objects
@@ -55,44 +56,75 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         
         for i in range(n_days - 20):  # Stop before end
             start_date = dates_list[i]
-            start_price = lows[i]  # Use Low for entry
             
-            # Look forward up to ~3 months (65 trading days)
+            # --- Uptrend Logic (Gain) ---
+            start_price_up = lows[i] # Entry at low
             max_gain = 0
-            best_day_idx = -1
+            best_gain_idx = -1
+            
+            # --- Downtrend Logic (Loss) ---
+            start_price_down = highs[i] # Entry at high
+            max_loss_pct = 0 # As a positive percentage drop
+            best_loss_idx = -1
             
             look_ahead_idx = min(i + 65, n_days)
+            curr_max_drwdn = 0
+            curr_max_recv = 0
             
             for j in range(i + 1, look_ahead_idx):
+                # Gain check
                 curr_high = highs[j]
-                gain = ((curr_high - start_price) / start_price) * 100
-                
+                gain = ((curr_high - start_price_up) / start_price_up) * 100
                 if gain > max_gain:
                     max_gain = gain
-                    best_day_idx = j
+                    best_gain_idx = j
+                
+                # Drawdown during gain search
+                dd = ((lows[j] - start_price_up) / start_price_up) * 100
+                if dd < curr_max_drwdn: curr_max_drwdn = dd
+                
+                # Loss check
+                curr_low = lows[j]
+                loss_pct = ((start_price_down - curr_low) / start_price_down) * 100
+                if loss_pct > max_loss_pct:
+                    max_loss_pct = loss_pct
+                    best_loss_idx = j
+
+                # Recovery during loss search
+                recv = ((highs[j] - start_price_down) / start_price_down) * 100
+                if recv > curr_max_recv: curr_max_recv = recv
             
-            # Apply Filter
-            if max_gain >= min_gain_percent and best_day_idx > i:
-                end_date = dates_list[best_day_idx]
-                duration_days = (end_date - start_date).days
-                
-                # Sanity check: end_date must be after start_date
-                if duration_days <= 0:
-                    continue
-                
-                # Group potential moves by (Year, Month)
+            # Save potential Gain Move
+            if max_gain >= min_gain_percent and best_gain_idx > i:
                 month_key = (start_date.year, start_date.month)
-                
-                if month_key not in moves_by_month:
-                    moves_by_month[month_key] = []
-                
+                if month_key not in moves_by_month: moves_by_month[month_key] = []
                 moves_by_month[month_key].append({
                     'low_date': start_date,
-                    'high_date': end_date,
-                    'start_price': start_price,
-                    'end_price': highs[best_day_idx],
+                    'high_date': dates_list[best_gain_idx],
+                    'start_price': start_price_up,
+                    'end_price': highs[best_gain_idx],
                     'gain': round(float(max_gain), 2),
-                    'duration': duration_days,
+                    'drawdown': round(float(curr_max_drwdn), 2),
+                    'duration': (dates_list[best_gain_idx] - start_date).days,
+                    'start_month': start_date.strftime('%B'),
+                    'start_month_idx': start_date.month,
+                    'start_year': start_date.year
+                })
+
+            # Save potential Loss Move (reusing the same min_threshold for fallback logic in cache)
+            # But for the baseline (5%), we'll capture anything > 5% drop
+            if max_loss_pct >= min_gain_percent and best_loss_idx > i:
+                month_key = (start_date.year, start_date.month)
+                if month_key not in fall_moves_by_month: fall_moves_by_month[month_key] = []
+                fall_moves_by_month[month_key].append({
+                    'start_date': start_date,
+                    'end_date': dates_list[best_loss_idx],
+                    'start_price': start_price_down,
+                    'end_price': lows[best_loss_idx],
+                    'gain': round(float(max_loss_pct), 2), # Using 'gain' key for schema consistency in dynamic filter
+                    'recovery': round(float(curr_max_recv), 2),
+                    'is_loss': True,
+                    'duration': (dates_list[best_loss_idx] - start_date).days,
                     'start_month': start_date.strftime('%B'),
                     'start_month_idx': start_date.month,
                     'start_year': start_date.year
@@ -101,13 +133,17 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         # Process the grouped moves: Keep ONLY the BEST move per month-year
         moves = []
         for key, month_moves in moves_by_month.items():
-            # Sort by gain (descending) so we pick the best one
             month_moves.sort(key=lambda x: x['gain'], reverse=True)
-            best_move = month_moves[0]
-            moves.append(best_move)
+            moves.append(month_moves[0])
         
-        # Sort moves by date
+        fall_moves = []
+        for key, month_falls in fall_moves_by_month.items():
+            month_falls.sort(key=lambda x: x['gain'], reverse=True)
+            fall_moves.append(month_falls[0])
+        
+        # Sort by date
         moves.sort(key=lambda x: x['low_date'])
+        fall_moves.sort(key=lambda x: x['start_date'])
         
         # 4. Monthly Statistics
         month_names = ['January', 'February', 'March', 'April', 'May', 'June', 
@@ -190,17 +226,23 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         for move in moves:
             move['low_date_str'] = move['low_date'].strftime('%d %b %Y')
             move['high_date_str'] = move['high_date'].strftime('%d %b %Y')
-            # Remove raw date objects (not JSON serializable)
             del move['low_date']
             del move['high_date']
+
+        for move in fall_moves:
+            move['start_date_str'] = move['start_date'].strftime('%d %b %Y')
+            move['end_date_str'] = move['end_date'].strftime('%d %b %Y')
+            del move['start_date']
+            del move['end_date']
 
         return {
             'ticker': ticker,
             'moves': moves,
+            'fall_moves': fall_moves,
             'monthly_stats': formatted_stats,
             'best_months': best_months,
             'insights': insights,
-            'total_years': 10
+            'total_years': total_years_analyzed
         }
 
     except Exception as e:

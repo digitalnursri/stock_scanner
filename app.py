@@ -19,7 +19,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
-SEASONAL_CACHE_FILE = 'seasonal_cache_v5.json'
+SEASONAL_CACHE_FILE = 'seasonal_cache_v6.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
 
@@ -408,20 +408,19 @@ def seasonal_screener():
     return render_template('seasonal_screener.html')
 
 @app.route('/api/seasonal-screener')
-@app.route('/api/seasonal-screener')
 def get_seasonal_screener_data():
     """
     API to get seasonal analysis for all Nifty 250 stocks
-    This endpoint now performs DYNAMIC filtering and aggregation to allow exact Min Gain %
+    This endpoint now performs DYNAMIC filtering and aggregation for Gain OR Loss
     """
     from flask import request
     
     try:
         min_gain = float(request.args.get('min_gain', 20))
+        direction = request.args.get('direction', 'gain') # 'gain' or 'loss'
         
         # Load from JSON cache file
         if not os.path.exists(SEASONAL_CACHE_FILE):
-            # If no cache at all, start background thread
             is_running = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
             if not is_running:
                 threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
@@ -441,12 +440,10 @@ def get_seasonal_screener_data():
             if datetime.now() - updated_at > timedelta(seconds=SEASONAL_CACHE_TTL):
                 is_stale = True
         
-        # Determine if background thread is already running
         is_updating = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
         if is_stale and not is_updating:
             threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
             
-        # Extract the baseline records (rallies >= 5%)
         raw_stocks = cached_data.get('stocks_baseline_5', [])
         processed_stocks = []
         
@@ -456,15 +453,20 @@ def get_seasonal_screener_data():
         # Dynamic filtering & aggregation
         for stock in raw_stocks:
             ticker = stock['ticker']
-            all_moves = stock.get('all_moves', [])
             
-            # Filter moves by exact min_gain requested by user
+            # Decide which moves list to use based on direction
+            if direction == 'loss':
+                all_moves = stock.get('fall_moves', [])
+            else:
+                all_moves = stock.get('all_moves', [])
+            
+            # Filter moves by exact threshold requested by user
             filtered_moves = [m for m in all_moves if m['gain'] >= min_gain]
             
-            # Re-calculate monthly stats for this specific min_gain
+            # Re-calculate monthly stats for this specific min_gain/direction
             monthly_stats_map = {m: {
                 'month': m, 'count': 0, 'total_gain': 0, 'min_gain': float('inf'), 
-                'max_gain': 0, 'years': set()
+                'max_gain': 0, 'total_drwdn': 0, 'min_drwdn': 0, 'years': set()
             } for m in month_names}
             
             for move in filtered_moves:
@@ -475,6 +477,15 @@ def get_seasonal_screener_data():
                 s['min_gain'] = min(s['min_gain'], move['gain'])
                 s['max_gain'] = max(s['max_gain'], move['gain'])
                 s['years'].add(move['start_year'])
+                # Track drawdown for gains or recovery for losses
+                if direction == 'loss':
+                    val = move.get('recovery', 0)
+                    s['total_drwdn'] += val
+                    if val > s['min_drwdn']: s['min_drwdn'] = val # Best recovery for loss
+                else:
+                    val = move.get('drawdown', 0)
+                    s['total_drwdn'] += val
+                    if val < s['min_drwdn']: s['min_drwdn'] = val # Worst drawdown for gain
                 
             formatted_stats = []
             total_rallies = 0
@@ -482,13 +493,13 @@ def get_seasonal_screener_data():
             max_rallies = -1
             max_avg_gain = -1
             
-            # Success rate denominator (usually 10)
             total_years = stock.get('total_years_analyzed', 10)
             
             for m_name in month_names:
                 s = monthly_stats_map[m_name]
                 if s['count'] > 0:
                     avg_g = s['total_gain'] / s['count']
+                    avg_d = s['total_drwdn'] / s['count']
                     succ_r = min((len(s['years']) / total_years) * 100, 100)
                     
                     stat_obj = {
@@ -497,12 +508,13 @@ def get_seasonal_screener_data():
                         'avg_gain': round(avg_g, 1),
                         'min_gain': round(s['min_gain'], 1),
                         'max_gain': round(s['max_gain'], 1),
+                        'avg_drawdown': round(avg_d, 1),
+                        'min_drawdown': round(float(s['min_drwdn']), 1),
                         'success_rate': round(succ_r, 0)
                     }
                     formatted_stats.append(stat_obj)
                     total_rallies += s['count']
                     
-                    # Determine best month (Occurrences first, then Avg Gain)
                     if s['count'] > max_rallies or (s['count'] == max_rallies and avg_g > max_avg_gain):
                         max_rallies = s['count']
                         max_avg_gain = avg_g
@@ -516,17 +528,19 @@ def get_seasonal_screener_data():
                     'best_month_rallies': best_month['occurrences'] if best_month else 0,
                     'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
                     'best_month_min_gain': best_month['min_gain'] if best_month else 0,
+                    'best_month_drawdown': best_month['avg_drawdown'] if best_month else 0,
+                    'best_month_min_drawdown': best_month['min_drawdown'] if best_month else 0,
                     'best_month_success': best_month['success_rate'] if best_month else 0,
                     'monthly_stats': formatted_stats
                 })
         
-        # Sort by total rallies descending
         processed_stocks.sort(key=lambda x: x['total_rallies'], reverse=True)
         
         return jsonify({
             'stocks': processed_stocks,
             'total_analyzed': len(raw_stocks),
             'min_gain_requested': min_gain,
+            'direction': direction,
             'updated_at': cached_data.get('updated_at'),
             'status': 'stale_updating' if (is_stale or cached_data.get('in_progress')) else 'fresh'
         })
@@ -540,9 +554,8 @@ def update_seasonal_cache():
     Background worker to refresh the seasonal screener data
     """
     print("Background update of seasonal cache started...")
-    from seasonal_analysis import analyze_seasonal_patterns
+    from seasonal_analysis import analyze_seasonal_patterns_v2
     import yfinance as yf
-    import concurrent.futures
     import warnings
     warnings.filterwarnings('ignore')
     
@@ -578,8 +591,6 @@ def update_seasonal_cache():
                             
                         if hist.empty:
                             continue
-                            
-                        from seasonal_analysis import analyze_seasonal_patterns_v2
                         
                         # Analyze at 5% baseline to capture all relevant moves
                         analysis = analyze_seasonal_patterns_v2(clean_ticker, baseline_gain, hist_data=hist)
@@ -587,7 +598,8 @@ def update_seasonal_cache():
                         if 'error' not in analysis:
                             results.append({
                                 'ticker': clean_ticker,
-                                'all_moves': analysis['moves'], # Full list of deduplicated moves
+                                'all_moves': analysis['moves'], # Uptrends
+                                'fall_moves': analysis.get('fall_moves', []), # Downtrends
                                 'total_years_analyzed': analysis.get('total_years', 10)
                             })
                     except Exception as e:

@@ -194,6 +194,35 @@
             font-weight: 500;
         }
 
+        .screener-table .negative {
+            color: #ff4d4d;
+        }
+
+        .mode-toggle {
+            display: flex;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .mode-btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+
         .loading-overlay {
             display: none;
             position: fixed;
@@ -298,7 +327,14 @@
             </div>
             <div class="screener-filters">
                 <div class="filter-control">
-                    <label>Min Gain %</label>
+                    <label>Analysis Mode</label>
+                    <div class="mode-toggle" id="analysisMode">
+                        <button class="mode-btn active" data-mode="gain">Gains</button>
+                        <button class="mode-btn" data-mode="loss">Losses</button>
+                    </div>
+                </div>
+                <div class="filter-control">
+                    <label id="minGainLabel">Min Gain %</label>
                     <input type="number" id="minGainFilter" value="20" min="5" max="100" step="1">
                 </div>
                 <div class="filter-control">
@@ -320,7 +356,7 @@
                     </select>
                 </div>
                 <div class="filter-control">
-                    <label>Min Rallies</label>
+                    <label id="minRalliesLabel">Min Rallies</label>
                     <input type="number" id="minRalliesFilter" value="5" min="1" max="50">
                 </div>
                 <div class="filter-control">
@@ -369,11 +405,13 @@
                 <thead>
                     <tr>
                         <th onclick="sortByColumn('ticker')">Ticker</th>
-                        <th onclick="sortByColumn('total_rallies')">Total Rallies</th>
+                        <th onclick="sortByColumn('total_rallies')" id="colTotalRallies">Total Rallies</th>
                         <th onclick="sortByColumn('best_month')">Best Month</th>
-                        <th onclick="sortByColumn('best_month_rallies')">Month Rallies</th>
-                        <th onclick="sortByColumn('best_month_avg_gain')">Avg Gain %</th>
-                        <th onclick="sortByColumn('min_rally_gain')">Min Rally Gain %</th>
+                        <th onclick="sortByColumn('best_month_rallies')" id="colMonthRallies">Month Rallies</th>
+                        <th onclick="sortByColumn('best_month_avg_gain')" id="colAvgGain">Avg Gain %</th>
+                        <th onclick="sortByColumn('min_rally_gain')" id="colMinGain">Min Rally Gain %</th>
+                        <th onclick="sortByColumn('best_month_drawdown')" id="colAvgDrwdn">Avg Drawdown %</th>
+                        <th onclick="sortByColumn('best_month_min_drawdown')" id="colMinDrwdn">Min Rally Loss %</th>
                         <th onclick="sortByColumn('best_month_success')">Success Rate</th>
                     </tr>
                 </thead>
@@ -403,6 +441,30 @@
         let sortColumn = 'total_rallies';
         let sortDirection = 'desc';
 
+        let currentMode = 'gain';
+
+        // Initialize Mode Toggle
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentMode = btn.dataset.mode;
+
+                // Update Labels
+                const isGain = currentMode === 'gain';
+                document.getElementById('minGainLabel').textContent = isGain ? 'Min Gain %' : 'Min Loss %';
+                document.getElementById('minRalliesLabel').textContent = isGain ? 'Min Rallies' : 'Min Dips';
+                document.getElementById('colTotalRallies').textContent = isGain ? 'Total Rallies' : 'Total Dips';
+                document.getElementById('colMonthRallies').textContent = isGain ? 'Month Rallies' : 'Month Dips';
+                document.getElementById('colAvgGain').textContent = isGain ? 'Avg Gain %' : 'Avg Loss %';
+                document.getElementById('colMinGain').textContent = isGain ? 'Min Rally Gain %' : 'Min Rally Loss %';
+                document.getElementById('colAvgDrwdn').textContent = isGain ? 'Avg Drawdown %' : 'Avg Recovery %';
+                document.getElementById('colMinDrwdn').textContent = isGain ? 'Min Rally Loss %' : 'Max Rally Recovery %';
+
+                loadScreenerData();
+            });
+        });
+
         async function loadScreenerData() {
             const minGain = document.getElementById('minGainFilter').value;
             const btn = document.getElementById('analyzeBtn');
@@ -413,7 +475,7 @@
             loading.classList.add('active');
 
             try {
-                const response = await fetch(`/api/seasonal-screener?min_gain=${minGain}`);
+                const response = await fetch(`/api/seasonal-screener?min_gain=${minGain}&direction=${currentMode}`);
                 const data = await response.json();
 
                 if (data.status === 'calculating') {
@@ -437,8 +499,9 @@
                     document.getElementById('emptyState').style.display = 'none';
 
                     if (data.min_gain_requested) {
+                        const label = currentMode === 'gain' ? 'gained' : 'lost';
                         document.getElementById('dynamicFilterHint').textContent =
-                            `Showing results where EVERY rally gained at least ${data.min_gain_requested}%`;
+                            `Showing results where EVERY rally ${label} at least ${data.min_gain_requested}%`;
                     }
 
                     if (data.status === 'stale_updating') {
@@ -502,6 +565,8 @@
                         occurrences: stock.best_month_rallies,
                         avg_gain: stock.best_month_avg_gain,
                         min_gain: stock.best_month_min_gain, // Matches backend name
+                        avg_drawdown: stock.best_month_drawdown,
+                        min_drawdown: stock.best_month_min_drawdown,
                         success_rate: stock.best_month_success
                     };
                 } else {
@@ -514,7 +579,7 @@
                     } else {
                         // Month exists in list? If not found, it implies 0 stats
                         displayStats = {
-                            month: targetMonthName, occurrences: 0, avg_gain: 0, min_gain: 0, success_rate: 0
+                            month: targetMonthName, occurrences: 0, avg_gain: 0, min_gain: 0, avg_drawdown: 0, min_drawdown: 0, success_rate: 0
                         };
                     }
                 }
@@ -541,12 +606,16 @@
                     display_month: displayStats.month,
                     display_rallies: displayStats.occurrences,
                     display_avg_gain: displayStats.avg_gain,
-                    display_min_gain: displayStats.min_gain, // New field for Min Rally Gain %
+                    display_min_gain: displayStats.min_gain,
+                    display_drawdown: displayStats.avg_drawdown,
+                    display_min_drawdown: displayStats.min_drawdown,
                     display_success: displayStats.success_rate,
                     // Fields for sorting
                     month_rallies: displayStats.occurrences,
                     avg_gain: displayStats.avg_gain,
-                    min_rally_gain: displayStats.min_gain, // New field for sorting
+                    min_rally_gain: displayStats.min_gain,
+                    avg_drawdown: displayStats.avg_drawdown,
+                    min_drawdown: displayStats.min_drawdown,
                     success_rate: displayStats.success_rate
                 });
             });
@@ -558,7 +627,9 @@
                 'best_month': 'display_month',
                 'best_month_rallies': 'month_rallies',
                 'best_month_avg_gain': 'avg_gain',
-                'min_rally_gain': 'min_rally_gain', // New sort key
+                'min_rally_gain': 'min_rally_gain',
+                'best_month_drawdown': 'avg_drawdown',
+                'best_month_min_drawdown': 'min_drawdown',
                 'best_month_success': 'success_rate'
             };
             const actualSortCol = sortMap[sortColumn] || sortColumn;
@@ -592,13 +663,20 @@
 
             displayData.forEach(item => {
                 const row = document.createElement('tr');
+                const valClass = currentMode === 'gain' ? 'positive' : 'negative';
+                const drwdnClass = currentMode === 'gain' ? 'negative' : 'positive';
+                const sign = currentMode === 'gain' ? '+' : '-';
+                const drwdnSign = currentMode === 'gain' ? '-' : '+';
+
                 row.innerHTML = `
                     <td><a href="/stock/${item.ticker}" class="ticker-link">${item.ticker}</a></td>
                     <td>${item.total_rallies}</td>
                     <td><span class="month-badge">${item.display_month}</span></td>
                     <td>${item.display_rallies}</td>
-                    <td class="positive">+${item.display_avg_gain}%</td>
-                    <td class="positive">+${item.display_min_gain}%</td>
+                    <td class="${valClass}">${sign}${item.display_avg_gain}%</td>
+                    <td class="${valClass}">${sign}${item.display_min_gain}%</td>
+                    <td class="${drwdnClass}">${drwdnSign}${Math.abs(item.display_drawdown)}%</td>
+                    <td class="${drwdnClass}">${drwdnSign}${Math.abs(item.display_min_drawdown)}%</td>
                     <td>${item.display_success}%</td>
                 `;
                 tbody.appendChild(row);
