@@ -436,37 +436,79 @@
             }
         }
 
+        function getMonthStats(stock, monthName) {
+            // Look up a specific month's stats from the monthly_stats array
+            if (!stock.monthly_stats) return null;
+            return stock.monthly_stats.find(m => m.month === monthName) || null;
+        }
+
         function applyFiltersAndRender() {
             const monthFilter = document.getElementById('monthFilter').value;
             const minRalliesInput = document.getElementById('minRalliesFilter').value;
             const minRallies = minRalliesInput ? parseInt(minRalliesInput, 10) : 0;
             const minSuccessRate = parseInt(document.getElementById('successRateFilter').value, 10) || 0;
 
-            console.log('Filtering with minRallies:', minRallies, 'minSuccessRate:', minSuccessRate);
+            // Build display data: when a specific month is selected, use THAT month's stats
+            let displayData = [];
 
-            let filtered = allResults.filter(stock => {
-                // Filter by best month's rallies (Month Rallies column)
-                if (stock.best_month_rallies < minRallies) {
-                    return false;
+            allResults.forEach(stock => {
+                if (monthFilter) {
+                    // A specific month is selected — use that month's stats
+                    const mStats = getMonthStats(stock, monthFilter);
+                    if (!mStats || mStats.occurrences === 0) return; // Skip if no rallies in this month
+
+                    // Apply filters against selected month's data
+                    if (mStats.occurrences < minRallies) return;
+                    if (mStats.success_rate < minSuccessRate) return;
+
+                    displayData.push({
+                        ticker: stock.ticker,
+                        total_rallies: stock.total_rallies,
+                        display_month: monthFilter,
+                        display_rallies: mStats.occurrences,
+                        display_avg_gain: mStats.avg_gain,
+                        display_success: mStats.success_rate,
+                        // Keep sortable fields
+                        month_rallies: mStats.occurrences,
+                        avg_gain: mStats.avg_gain,
+                        success_rate: mStats.success_rate
+                    });
+                } else {
+                    // "All Months" — use the best month data (original behavior)
+                    if (stock.best_month_rallies < minRallies) return;
+                    if (stock.max_success_rate < minSuccessRate) return;
+
+                    displayData.push({
+                        ticker: stock.ticker,
+                        total_rallies: stock.total_rallies,
+                        display_month: stock.best_month,
+                        display_rallies: stock.best_month_rallies,
+                        display_avg_gain: stock.best_month_avg_gain,
+                        display_success: stock.best_month_success,
+                        // Keep sortable fields
+                        month_rallies: stock.best_month_rallies,
+                        avg_gain: stock.best_month_avg_gain,
+                        success_rate: stock.best_month_success
+                    });
                 }
-
-                // Filter by success rate
-                if (stock.max_success_rate < minSuccessRate) {
-                    return false;
-                }
-
-                // Filter by target month - show only stocks where this is the BEST month
-                if (monthFilter && stock.best_month !== monthFilter) {
-                    return false;
-                }
-
-                return true;
             });
 
             // Sort
-            filtered.sort((a, b) => {
-                let aVal = a[sortColumn];
-                let bVal = b[sortColumn];
+            const sortMap = {
+                'ticker': 'ticker',
+                'total_rallies': 'total_rallies',
+                'best_month': 'display_month',
+                'best_month_rallies': 'month_rallies',
+                'best_month_avg_gain': 'avg_gain',
+                'best_month_success': 'success_rate'
+            };
+            const actualSortCol = sortMap[sortColumn] || sortColumn;
+
+            displayData.sort((a, b) => {
+                let aVal = a[actualSortCol];
+                let bVal = b[actualSortCol];
+                if (aVal === undefined) aVal = 0;
+                if (bVal === undefined) bVal = 0;
 
                 if (typeof aVal === 'string') {
                     return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
@@ -475,12 +517,12 @@
             });
 
             // Update stats
-            document.getElementById('matchingStocksValue').textContent = filtered.length;
+            document.getElementById('matchingStocksValue').textContent = displayData.length;
 
-            // Find most common best month
+            // Find most common month in filtered results
             const monthCounts = {};
-            filtered.forEach(s => {
-                monthCounts[s.best_month] = (monthCounts[s.best_month] || 0) + 1;
+            displayData.forEach(s => {
+                monthCounts[s.display_month] = (monthCounts[s.display_month] || 0) + 1;
             });
             const topMonth = Object.entries(monthCounts).sort((a, b) => b[1] - a[1])[0];
             document.getElementById('topMonthValue').textContent = topMonth ? topMonth[0] : '-';
@@ -489,15 +531,15 @@
             const tbody = document.getElementById('resultsBody');
             tbody.innerHTML = '';
 
-            filtered.forEach(stock => {
+            displayData.forEach(item => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><a href="/stock/${stock.ticker}" class="ticker-link">${stock.ticker}</a></td>
-                    <td>${stock.total_rallies}</td>
-                    <td><span class="month-badge">${stock.best_month}</span></td>
-                    <td>${stock.best_month_rallies}</td>
-                    <td class="positive">+${stock.best_month_avg_gain}%</td>
-                    <td>${stock.best_month_success}%</td>
+                    <td><a href="/stock/${item.ticker}" class="ticker-link">${item.ticker}</a></td>
+                    <td>${item.total_rallies}</td>
+                    <td><span class="month-badge">${item.display_month}</span></td>
+                    <td>${item.display_rallies}</td>
+                    <td class="positive">+${item.display_avg_gain}%</td>
+                    <td>${item.display_success}%</td>
                 `;
                 tbody.appendChild(row);
             });
