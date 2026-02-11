@@ -19,7 +19,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
-SEASONAL_CACHE_FILE = 'seasonal_cache_v3.json'
+SEASONAL_CACHE_FILE = 'seasonal_cache_v4.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
 
@@ -464,16 +464,20 @@ def get_seasonal_screener_data():
         
         if 'stocks_by_gain' in cached_data:
             # Match min_gain to closest available threshold (10, 15, 20, 25, 30, 40, 50, 75, 100)
-            thresholds = [10, 15, 20, 25, 30, 40, 50, 75, 100]
-            # Find the closest threshold that is >= min_gain, or the smallest available
-            matched_threshold = 20 # Default
-            higher_thresholds = [t for t in thresholds if t >= min_gain]
+            available_keys = sorted([int(k) for k in cached_data['stocks_by_gain'].keys()])
+            
+            # Find the closest threshold that is >= min_gain
+            matched_threshold = None
+            higher_thresholds = [t for t in available_keys if t >= min_gain]
+            
             if higher_thresholds:
                 matched_threshold = min(higher_thresholds)
+                stocks = cached_data['stocks_by_gain'].get(str(matched_threshold), [])
             else:
-                matched_threshold = max(thresholds)
-            
-            stocks = cached_data['stocks_by_gain'].get(str(matched_threshold), [])
+                # If even our highest cache is lower than requested, we can't satisfy the "at least" condition
+                # unless we want to return a subset. But for strictness, let's say none found.
+                stocks = []
+                matched_threshold = max(available_keys) if available_keys else None
         elif 'stocks' in cached_data:
             stocks = cached_data['stocks']
 
@@ -557,6 +561,7 @@ def update_seasonal_cache():
                                     'best_month': best_month['month'] if best_month else 'N/A',
                                     'best_month_rallies': best_month['occurrences'] if best_month else 0,
                                     'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
+                                    'best_month_min_gain': best_month['min_gain'] if best_month else 0,
                                     'best_month_success': best_month['success_rate'] if best_month else 0,
                                     'max_success_rate': max_success_rate,
                                     'monthly_stats': analysis['monthly_stats']

@@ -372,6 +372,7 @@
                         <th onclick="sortByColumn('best_month')">Best Month</th>
                         <th onclick="sortByColumn('best_month_rallies')">Month Rallies</th>
                         <th onclick="sortByColumn('best_month_avg_gain')">Avg Gain %</th>
+                        <th onclick="sortByColumn('min_rally_gain')">Min Rally Gain %</th>
                         <th onclick="sortByColumn('best_month_success')">Success Rate</th>
                     </tr>
                 </thead>
@@ -501,6 +502,7 @@
                         month: stock.best_month,
                         occurrences: stock.best_month_rallies,
                         avg_gain: stock.best_month_avg_gain,
+                        min_gain: stock.best_month_min_gain, // Matches backend name
                         success_rate: stock.best_month_success
                     };
                 } else {
@@ -513,7 +515,7 @@
                     } else {
                         // Month exists in list? If not found, it implies 0 stats
                         displayStats = {
-                            month: targetMonthName, occurrences: 0, avg_gain: 0, success_rate: 0
+                            month: targetMonthName, occurrences: 0, avg_gain: 0, min_gain: 0, success_rate: 0
                         };
                     }
                 }
@@ -540,10 +542,12 @@
                     display_month: displayStats.month,
                     display_rallies: displayStats.occurrences,
                     display_avg_gain: displayStats.avg_gain,
+                    display_min_gain: displayStats.min_gain, // New field for Min Rally Gain %
                     display_success: displayStats.success_rate,
                     // Fields for sorting
                     month_rallies: displayStats.occurrences,
                     avg_gain: displayStats.avg_gain,
+                    min_rally_gain: displayStats.min_gain, // New field for sorting
                     success_rate: displayStats.success_rate
                 });
             });
@@ -555,6 +559,7 @@
                 'best_month': 'display_month',
                 'best_month_rallies': 'month_rallies',
                 'best_month_avg_gain': 'avg_gain',
+                'min_rally_gain': 'min_rally_gain', // New sort key
                 'best_month_success': 'success_rate'
             };
             const actualSortCol = sortMap[sortColumn] || sortColumn;
@@ -594,6 +599,7 @@
                     <td><span class="month-badge">${item.display_month}</span></td>
                     <td>${item.display_rallies}</td>
                     <td class="positive">+${item.display_avg_gain}%</td>
+                    <td class="positive">+${item.display_min_gain}%</td>
                     <td>${item.display_success}%</td>
                 `;
                 tbody.appendChild(row);
