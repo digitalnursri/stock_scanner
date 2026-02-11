@@ -129,6 +129,49 @@
             overflow: hidden;
         }
 
+        /* Consistency Toggle Styles */
+        .consistency-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(139, 92, 246, 0.1);
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .consistency-toggle:hover {
+            border-color: var(--accent);
+            background: rgba(139, 92, 246, 0.15);
+        }
+
+        .consistency-toggle.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+        }
+
+        .consistency-toggle.active label {
+            color: white;
+        }
+
+        .consistency-toggle label {
+            margin: 0;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--text-muted);
+            text-transform: none;
+        }
+
+        .consistency-toggle i {
+            font-size: 0.9rem;
+        }
+
         .screener-table {
             width: 100%;
             border-collapse: collapse;
@@ -371,6 +414,10 @@
                         <option value="100">100%</option>
                     </select>
                 </div>
+                <div class="consistency-toggle" id="consistencyToggle">
+                    <i class="fas fa-check-circle"></i>
+                    <label>100% Consistency</label>
+                </div>
                 <button class="btn-analyze" id="analyzeBtn" onclick="loadScreenerData()">
                     🔍 Analyze Stocks
                 </button>
@@ -465,6 +512,21 @@
             });
         });
 
+        // Initialize Consistency Toggle
+        let consistencyActive = false;
+        const consistencyToggle = document.getElementById('consistencyToggle');
+        consistencyToggle.addEventListener('click', () => {
+            consistencyActive = !consistencyActive;
+            consistencyToggle.classList.toggle('active', consistencyActive);
+
+            // If active, force success rate filter to 100
+            if (consistencyActive) {
+                document.getElementById('successRateFilter').value = '100';
+            }
+
+            applyFiltersAndRender();
+        });
+
         async function loadScreenerData() {
             const minGain = document.getElementById('minGainFilter').value;
             const btn = document.getElementById('analyzeBtn');
@@ -535,7 +597,20 @@
             const minGain = parseFloat(document.getElementById('minGainFilter').value) || 20;
             const selectedMonthStr = document.getElementById('monthFilter').value; // "January" to "December" or ""
             const minRallies = parseInt(document.getElementById('minRalliesFilter').value) || 0;
-            const minSuccessRate = parseInt(document.getElementById('successRateFilter').value) || 0;
+
+            // Override success rate if consistency mode is active
+            let minSuccessRate = consistencyActive ? 100 : (parseInt(document.getElementById('successRateFilter').value) || 0);
+
+            // Update UI hint if consistency is active
+            const hintElement = document.getElementById('dynamicFilterHint');
+            const label = currentMode === 'gain' ? 'gained' : 'lost';
+            if (consistencyActive) {
+                hintElement.innerHTML = `<strong>100% Consistency:</strong> Showing only stocks that ${label} at least ${minGain}% <u>every single year</u>.`;
+                hintElement.style.color = '#10b981'; // Greenish
+            } else {
+                hintElement.textContent = `Showing results where EVERY rally ${label} at least ${minGain}%`;
+                hintElement.style.color = 'var(--accent)';
+            }
 
             const tableBody = document.getElementById('resultsBody'); // Changed from screenerTableBody
             tableBody.innerHTML = '';
