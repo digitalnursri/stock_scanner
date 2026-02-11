@@ -463,10 +463,19 @@ def get_seasonal_screener_data():
             # Filter moves by exact threshold requested by user
             filtered_moves = [m for m in all_moves if m['gain'] >= min_gain]
             
+            # ALSO calculate the other direction for risk/reward context
+            if direction == 'loss':
+                other_moves_list = stock.get('all_moves', [])
+            else:
+                other_moves_list = stock.get('fall_moves', [])
+            other_filtered = [m for m in other_moves_list if m['gain'] >= min_gain]
+            
             # Re-calculate monthly stats for this specific min_gain/direction
             monthly_stats_map = {m: {
                 'month': m, 'count': 0, 'total_gain': 0, 'min_gain': float('inf'), 
-                'max_gain': 0, 'total_drwdn': 0, 'min_drwdn': 0, 'years': set()
+                'max_gain': 0, 'total_drwdn': 0, 'min_drwdn': 0, 
+                'count_other': 0, 'total_gain_other': 0, 'min_gain_other': float('inf'), 'max_gain_other': 0,
+                'years': set()
             } for m in month_names}
             
             for move in filtered_moves:
@@ -477,15 +486,24 @@ def get_seasonal_screener_data():
                 s['min_gain'] = min(s['min_gain'], move['gain'])
                 s['max_gain'] = max(s['max_gain'], move['gain'])
                 s['years'].add(move['start_year'])
-                # Track drawdown for gains or recovery for losses
+                # Track intraday drawdown/recovery
                 if direction == 'loss':
                     val = move.get('recovery', 0)
                     s['total_drwdn'] += val
-                    if val > s['min_drwdn']: s['min_drwdn'] = val # Best recovery for loss
+                    if val > s['min_drwdn']: s['min_drwdn'] = val
                 else:
                     val = move.get('drawdown', 0)
                     s['total_drwdn'] += val
-                    if val < s['min_drwdn']: s['min_drwdn'] = val # Worst drawdown for gain
+                    if val < s['min_drwdn']: s['min_drwdn'] = val
+
+            # Aggregate "Other" direction (Independent moves in same month)
+            for move in other_filtered:
+                m_name = move['start_month']
+                s = monthly_stats_map[m_name]
+                s['count_other'] += 1
+                s['total_gain_other'] += move['gain']
+                s['min_gain_other'] = min(s['min_gain_other'], move['gain'])
+                s['max_gain_other'] = max(s['max_gain_other'], move['gain'])
                 
             formatted_stats = []
             total_rallies = 0
@@ -510,7 +528,12 @@ def get_seasonal_screener_data():
                         'max_gain': round(s['max_gain'], 1),
                         'avg_drawdown': round(avg_d, 1),
                         'min_drawdown': round(float(s['min_drwdn']), 1),
-                        'success_rate': round(succ_r, 0)
+                        'success_rate': round(succ_r, 0),
+                        # Cross-trend metrics
+                        'opp_count': s['count_other'],
+                        'opp_avg_gain': round(s['total_gain_other'] / s['count_other'], 1) if s['count_other'] > 0 else 0,
+                        'opp_max_gain': round(s['max_gain_other'], 1) if s['count_other'] > 0 else 0,
+                        'opp_min_gain': round(s['min_gain_other'], 1) if s['count_other'] > 0 else 0
                     }
                     formatted_stats.append(stat_obj)
                     total_rallies += s['count']
@@ -531,6 +554,9 @@ def get_seasonal_screener_data():
                     'best_month_drawdown': best_month['avg_drawdown'] if best_month else 0,
                     'best_month_min_drawdown': best_month['min_drawdown'] if best_month else 0,
                     'best_month_success': best_month['success_rate'] if best_month else 0,
+                    'best_month_opp_avg': best_month['opp_avg_gain'] if best_month else 0,
+                    'best_month_opp_max': best_month['opp_max_gain'] if best_month else 0,
+                    'best_month_opp_min': best_month['opp_min_gain'] if best_month else 0,
                     'monthly_stats': formatted_stats
                 })
         

@@ -562,11 +562,11 @@
                     // The backend already provides best_month, best_month_rallies, etc.
                     displayStats = {
                         month: stock.best_month,
-                        occurrences: stock.best_month_rallies,
                         avg_gain: stock.best_month_avg_gain,
                         min_gain: stock.best_month_min_gain, // Matches backend name
-                        avg_drawdown: stock.best_month_drawdown,
-                        min_drawdown: stock.best_month_min_drawdown,
+                        // Drawdown/Recovery columns now prioritize Cross-Trend stats for better risk awareness
+                        avg_drawdown: stock.best_month_opp_avg || stock.best_month_drawdown,
+                        min_drawdown: stock.best_month_opp_max || stock.best_month_min_drawdown,
                         success_rate: stock.best_month_success
                     };
                 } else {
@@ -575,7 +575,11 @@
                     const monthData = stock.monthly_stats.find(m => m.month === targetMonthName);
 
                     if (monthData) {
-                        displayStats = monthData;
+                        displayStats = {
+                            ...monthData,
+                            avg_drawdown: monthData.opp_avg_gain || monthData.avg_drawdown,
+                            min_drawdown: monthData.opp_max_gain || monthData.min_drawdown
+                        };
                     } else {
                         // Month exists in list? If not found, it implies 0 stats
                         displayStats = {
