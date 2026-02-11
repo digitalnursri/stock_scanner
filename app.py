@@ -19,7 +19,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
-SEASONAL_CACHE_FILE = 'seasonal_cache_v4.json'
+SEASONAL_CACHE_FILE = 'seasonal_cache_v5.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
 
@@ -408,97 +408,132 @@ def seasonal_screener():
     return render_template('seasonal_screener.html')
 
 @app.route('/api/seasonal-screener')
+@app.route('/api/seasonal-screener')
 def get_seasonal_screener_data():
     """
     API to get seasonal analysis for all Nifty 250 stocks
-    Returns aggregated data for filtering
+    This endpoint now performs DYNAMIC filtering and aggregation to allow exact Min Gain %
     """
     from flask import request
     
-    min_gain = float(request.args.get('min_gain', 20))
-    
-    # 1. Try to load from JSON cache file
-    cached_data = None
-    if os.path.exists(SEASONAL_CACHE_FILE):
-        try:
-            with open(SEASONAL_CACHE_FILE, 'r') as f:
-                cached_data = json.load(f)
-        except Exception as e:
-            print(f"Error reading cache file: {e}")
-
-    # 2. Check if cache is stale or missing
-    is_stale = True
-    if cached_data:
-        updated_at_str = cached_data.get('updated_at', '2000-01-01')
-        updated_at = datetime.fromisoformat(updated_at_str)
-        if datetime.now() - updated_at < timedelta(seconds=SEASONAL_CACHE_TTL):
-            is_stale = False
-            
-            # Count total stocks in any threshold to see if it's a valid cache
-            has_data = False
-            if 'stocks_by_gain' in cached_data:
-                # Check if any threshold has stocks
-                for t in cached_data['stocks_by_gain']:
-                    if len(cached_data['stocks_by_gain'][t]) > 0:
-                        has_data = True
-                        break
-            elif 'stocks' in cached_data:
-                if len(cached_data['stocks']) > 0:
-                    has_data = True
-            
-            if not has_data:
-                is_stale = True
-
-    # 3. Trigger background update if stale or missing (and not already running)
-    if is_stale:
-        # Check if a thread is already running for this (basic check)
-        is_running = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
-        if not is_running:
-            print("Screener cache is stale or missing. Starting background update...")
-            threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
-
-    # 4. Determine which list to return (Fresh or Stale)
-    if cached_data:
-        stocks = []
-        matched_threshold = None
+    try:
+        min_gain = float(request.args.get('min_gain', 20))
         
-        if 'stocks_by_gain' in cached_data:
-            # Match min_gain to closest available threshold (10, 15, 20, 25, 30, 40, 50, 75, 100)
-            available_keys = sorted([int(k) for k in cached_data['stocks_by_gain'].keys()])
-            
-            # Find the closest threshold that is >= min_gain
-            matched_threshold = None
-            higher_thresholds = [t for t in available_keys if t >= min_gain]
-            
-            if higher_thresholds:
-                matched_threshold = min(higher_thresholds)
-                stocks = cached_data['stocks_by_gain'].get(str(matched_threshold), [])
-            else:
-                # If even our highest cache is lower than requested, we can't satisfy the "at least" condition
-                # unless we want to return a subset. But for strictness, let's say none found.
-                stocks = []
-                matched_threshold = max(available_keys) if available_keys else None
-        elif 'stocks' in cached_data:
-            stocks = cached_data['stocks']
-
-        if stocks:
+        # Load from JSON cache file
+        if not os.path.exists(SEASONAL_CACHE_FILE):
+            # If no cache at all, start background thread
+            is_running = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
+            if not is_running:
+                threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
+                
             return jsonify({
-                'stocks': stocks,
-                'total_analyzed': len(stocks),
-                'min_gain_filter': min_gain,
-                'matched_threshold': matched_threshold,
-                'updated_at': cached_data['updated_at'],
-                'status': 'stale_updating' if is_stale else 'fresh'
+                "status": "calculating", 
+                "message": "Initializing seasonal analysis. This takes 2-3 minutes.",
+                "stocks": []
             })
-
-    # 5. If no cache exists at all
-    return jsonify({
-        'stocks': [],
-        'total_analyzed': 0,
-        'min_gain_filter': min_gain,
-        'status': 'calculating',
-        'message': 'Initial analysis in progress. This usually takes 2-5 minutes. Please refresh soon.'
-    })
+            
+        with open(SEASONAL_CACHE_FILE, 'r') as f:
+            cached_data = json.load(f)
+            
+        is_stale = False
+        if 'updated_at' in cached_data:
+            updated_at = datetime.fromisoformat(cached_data['updated_at'])
+            if datetime.now() - updated_at > timedelta(seconds=SEASONAL_CACHE_TTL):
+                is_stale = True
+        
+        # Determine if background thread is already running
+        is_updating = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
+        if is_stale and not is_updating:
+            threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
+            
+        # Extract the baseline records (rallies >= 5%)
+        raw_stocks = cached_data.get('stocks_baseline_5', [])
+        processed_stocks = []
+        
+        month_names = ['January', 'February', 'March', 'April', 'May', 'June', 
+                       'July', 'August', 'September', 'October', 'November', 'December']
+        
+        # Dynamic filtering & aggregation
+        for stock in raw_stocks:
+            ticker = stock['ticker']
+            all_moves = stock.get('all_moves', [])
+            
+            # Filter moves by exact min_gain requested by user
+            filtered_moves = [m for m in all_moves if m['gain'] >= min_gain]
+            
+            # Re-calculate monthly stats for this specific min_gain
+            monthly_stats_map = {m: {
+                'month': m, 'count': 0, 'total_gain': 0, 'min_gain': float('inf'), 
+                'max_gain': 0, 'years': set()
+            } for m in month_names}
+            
+            for move in filtered_moves:
+                m_name = move['start_month']
+                s = monthly_stats_map[m_name]
+                s['count'] += 1
+                s['total_gain'] += move['gain']
+                s['min_gain'] = min(s['min_gain'], move['gain'])
+                s['max_gain'] = max(s['max_gain'], move['gain'])
+                s['years'].add(move['start_year'])
+                
+            formatted_stats = []
+            total_rallies = 0
+            best_month = None
+            max_rallies = -1
+            max_avg_gain = -1
+            
+            # Success rate denominator (usually 10)
+            total_years = stock.get('total_years_analyzed', 10)
+            
+            for m_name in month_names:
+                s = monthly_stats_map[m_name]
+                if s['count'] > 0:
+                    avg_g = s['total_gain'] / s['count']
+                    succ_r = min((len(s['years']) / total_years) * 100, 100)
+                    
+                    stat_obj = {
+                        'month': m_name,
+                        'occurrences': s['count'],
+                        'avg_gain': round(avg_g, 1),
+                        'min_gain': round(s['min_gain'], 1),
+                        'max_gain': round(s['max_gain'], 1),
+                        'success_rate': round(succ_r, 0)
+                    }
+                    formatted_stats.append(stat_obj)
+                    total_rallies += s['count']
+                    
+                    # Determine best month (Occurrences first, then Avg Gain)
+                    if s['count'] > max_rallies or (s['count'] == max_rallies and avg_g > max_avg_gain):
+                        max_rallies = s['count']
+                        max_avg_gain = avg_g
+                        best_month = stat_obj
+            
+            if total_rallies > 0:
+                processed_stocks.append({
+                    'ticker': ticker,
+                    'total_rallies': total_rallies,
+                    'best_month': best_month['month'] if best_month else 'N/A',
+                    'best_month_rallies': best_month['occurrences'] if best_month else 0,
+                    'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
+                    'best_month_min_gain': best_month['min_gain'] if best_month else 0,
+                    'best_month_success': best_month['success_rate'] if best_month else 0,
+                    'monthly_stats': formatted_stats
+                })
+        
+        # Sort by total rallies descending
+        processed_stocks.sort(key=lambda x: x['total_rallies'], reverse=True)
+        
+        return jsonify({
+            'stocks': processed_stocks,
+            'total_analyzed': len(raw_stocks),
+            'min_gain_requested': min_gain,
+            'updated_at': cached_data.get('updated_at'),
+            'status': 'stale_updating' if (is_stale or cached_data.get('in_progress')) else 'fresh'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 def update_seasonal_cache():
     """
@@ -517,8 +552,8 @@ def update_seasonal_cache():
             print("Failed to fetch tickers for background update")
             return
 
-        target_thresholds = [10, 15, 20, 25, 30, 40, 50, 75, 100]
-        results_by_gain = {threshold: [] for threshold in target_thresholds}
+        baseline_gain = 5
+        results = []
         
         # Batch process tickers to avoid memory issues while benefiting from batch download
         chunk_size = 20
@@ -546,36 +581,20 @@ def update_seasonal_cache():
                             
                         from seasonal_analysis import analyze_seasonal_patterns_v2
                         
-                        # Calculate for each threshold
-                        for threshold in target_thresholds:
-                            analysis = analyze_seasonal_patterns_v2(clean_ticker, threshold, hist_data=hist)
-                            
-                            if 'error' not in analysis:
-                                best_month = analysis['best_months'][0] if analysis['best_months'] else None
-                                total_rallies = sum(m['occurrences'] for m in analysis['monthly_stats'])
-                                max_success_rate = max((m['success_rate'] for m in analysis['monthly_stats']), default=0)
-                                
-                                results_by_gain[threshold].append({
-                                    'ticker': clean_ticker,
-                                    'total_rallies': total_rallies,
-                                    'best_month': best_month['month'] if best_month else 'N/A',
-                                    'best_month_rallies': best_month['occurrences'] if best_month else 0,
-                                    'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
-                                    'best_month_min_gain': best_month['min_gain'] if best_month else 0,
-                                    'best_month_success': best_month['success_rate'] if best_month else 0,
-                                    'max_success_rate': max_success_rate,
-                                    'monthly_stats': analysis['monthly_stats']
-                                })
+                        # Analyze at 5% baseline to capture all relevant moves
+                        analysis = analyze_seasonal_patterns_v2(clean_ticker, baseline_gain, hist_data=hist)
+                        
+                        if 'error' not in analysis:
+                            results.append({
+                                'ticker': clean_ticker,
+                                'all_moves': analysis['moves'], # Full list of deduplicated moves
+                                'total_years_analyzed': analysis.get('total_years', 10)
+                            })
                     except Exception as e:
-                        # print(f"Error processing {ticker}: {e}")
                         pass
                 
-                # Incremental save
-                for threshold in results_by_gain:
-                    results_by_gain[threshold].sort(key=lambda x: x['total_rallies'], reverse=True)
-                
                 cache_content = {
-                    'stocks_by_gain': results_by_gain,
+                    'stocks_baseline_5': results,
                     'updated_at': datetime.now().isoformat(),
                     'total_tickers': len(tickers),
                     'in_progress': i + chunk_size < len(all_tickers)
@@ -589,8 +608,7 @@ def update_seasonal_cache():
                 continue
 
         # Final Summary
-        total_processed = len(results_by_gain[20]) # Use 20 as primary count
-        print(f"Background update complete. {total_processed} stocks total cached.")
+        print(f"Background update complete. {len(results)} stocks total cached.")
         
     except Exception as e:
         print(f"Critical error in update_seasonal_cache: {e}")

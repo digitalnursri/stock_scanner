@@ -299,7 +299,7 @@
             <div class="screener-filters">
                 <div class="filter-control">
                     <label>Min Gain %</label>
-                    <input type="number" id="minGainFilter" value="20" min="5" max="100" step="5">
+                    <input type="number" id="minGainFilter" value="20" min="5" max="100" step="1">
                 </div>
                 <div class="filter-control">
                     <label>Target Month</label>
@@ -340,7 +340,8 @@
                 </button>
             </div>
             <div class="filter-hint">
-                <div id="effectiveThreshold" class="effective-threshold"></div>
+                <div id="dynamicFilterHint" class="effective-threshold">Results are dynamically calculated for your
+                    exact Min Gain.</div>
                 💡 Tip: "Min Rallies" counts how many times a stock rose in the last 10 years. If you set it to 10, only
                 100% success stocks will show.
             </div>
@@ -435,11 +436,9 @@
                     document.getElementById('resultsContainer').style.display = 'block';
                     document.getElementById('emptyState').style.display = 'none';
 
-                    if (data.matched_threshold) {
-                        document.getElementById('effectiveThreshold').textContent =
-                            `Matched to closest pre-calculated tier: > ${data.matched_threshold}% Gain`;
-                    } else {
-                        document.getElementById('effectiveThreshold').textContent = '';
+                    if (data.min_gain_requested) {
+                        document.getElementById('dynamicFilterHint').textContent =
+                            `Showing results where EVERY rally gained at least ${data.min_gain_requested}%`;
                     }
 
                     if (data.status === 'stale_updating') {
