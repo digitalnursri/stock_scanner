@@ -19,7 +19,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
-SEASONAL_CACHE_FILE = 'seasonal_cache_v6.json'
+SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
 
@@ -511,6 +511,7 @@ def get_seasonal_screener_data():
             max_rallies = -1
             max_avg_gain = -1
             
+            month_availability = stock.get('month_availability', {})
             total_years = stock.get('total_years_analyzed', 10)
             
             for m_name in month_names:
@@ -518,7 +519,9 @@ def get_seasonal_screener_data():
                 if s['count'] > 0:
                     avg_g = s['total_gain'] / s['count']
                     avg_d = s['total_drwdn'] / s['count']
-                    succ_r = min((len(s['years']) / total_years) * 100, 100)
+                    # SUCCESS RATE: (Years with Target / Total Times that Month Occurred in 10yrs)
+                    denom = month_availability.get(m_name, total_years)
+                    succ_r = min((len(s['years']) / denom) * 100, 100) if denom > 0 else 0
                     
                     stat_obj = {
                         'month': m_name,
@@ -650,6 +653,123 @@ def update_seasonal_cache():
         
     except Exception as e:
         print(f"Critical error in update_seasonal_cache: {e}")
+
+ACCUMULATION_CACHE_FILE = 'accumulation_cache.json'
+ACCUMULATION_CACHE_TTL = 86400  # 24 hours
+
+@app.route('/accumulation-scanner')
+def accumulation_scanner():
+    """Accumulation Scanner page"""
+    return render_template('accumulation_scanner.html')
+
+@app.route('/api/accumulation-scanner')
+def get_accumulation_data():
+    """
+    API to get accumulation pattern scan results for all Nifty 250 stocks.
+    Uses file-based cache with background refresh.
+    """
+    try:
+        # Check if cache file exists
+        if not os.path.exists(ACCUMULATION_CACHE_FILE):
+            is_running = any(t.name == "AccumulationCacheUpdater" for t in threading.enumerate())
+            if not is_running:
+                threading.Thread(
+                    target=update_accumulation_cache,
+                    name="AccumulationCacheUpdater",
+                    daemon=True
+                ).start()
+            return jsonify({
+                "status": "calculating",
+                "message": "Scanning stocks for accumulation patterns. This takes 2-3 minutes.",
+                "stocks": []
+            })
+
+        with open(ACCUMULATION_CACHE_FILE, 'r') as f:
+            cached_data = json.load(f)
+
+        # Check staleness
+        is_stale = False
+        if 'updated_at' in cached_data:
+            from datetime import datetime
+            updated_at = datetime.fromisoformat(cached_data['updated_at'])
+            if (datetime.now() - updated_at).total_seconds() > ACCUMULATION_CACHE_TTL:
+                is_stale = True
+
+        is_updating = any(t.name == "AccumulationCacheUpdater" for t in threading.enumerate())
+        if is_stale and not is_updating:
+            threading.Thread(
+                target=update_accumulation_cache,
+                name="AccumulationCacheUpdater",
+                daemon=True
+            ).start()
+
+        # Apply client-side filters
+        from flask import request
+        min_score = int(request.args.get('min_score', 0))
+        tag_filter = request.args.get('tag', 'all')
+
+        stocks = cached_data.get('stocks', [])
+
+        if min_score > 0:
+            stocks = [s for s in stocks if s['score'] >= min_score]
+
+        if tag_filter != 'all':
+            stocks = [s for s in stocks if s['tag'] == tag_filter]
+
+        return jsonify({
+            'stocks': stocks,
+            'total_scanned': cached_data.get('total_scanned', 0),
+            'total_matched': len(stocks),
+            'breakdown': cached_data.get('breakdown', {}),
+            'updated_at': cached_data.get('updated_at'),
+            'status': 'stale_updating' if is_stale else 'fresh'
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def update_accumulation_cache():
+    """Background worker to refresh accumulation scanner data."""
+    print("Background update of accumulation cache started...")
+    from accumulation_detector import scan_accumulation
+    from datetime import datetime
+    import os
+    import json
+
+    try:
+        result = scan_accumulation()
+
+        if 'error' not in result:
+            cache_content = {
+                'stocks': result['stocks'],
+                'total_scanned': result['total_scanned'],
+                'total_matched': result['total_matched'],
+                'breakdown': result['breakdown'],
+                'updated_at': datetime.now().isoformat()
+            }
+
+            # Write to temp file first for atomic swap
+            temp_file = ACCUMULATION_CACHE_FILE + '.tmp'
+            with open(temp_file, 'w') as f:
+                json.dump(cache_content, f)
+            
+            # Atomic swap
+            if os.path.exists(ACCUMULATION_CACHE_FILE):
+                os.remove(ACCUMULATION_CACHE_FILE)
+            os.rename(temp_file, ACCUMULATION_CACHE_FILE)
+            
+            print(f"Accumulation cache updated: {result['total_matched']} stocks matched out of {result['total_scanned']} scanned.")
+        else:
+            print(f"Accumulation scan error: {result['error']}")
+
+    except Exception as e:
+        print(f"Critical error in update_accumulation_cache: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

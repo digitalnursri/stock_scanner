@@ -8,3 +8,13 @@ seasonal_screener_cache.json
 analytics_cache/
 test_performance.py
 test_screener_api.py
+
+# Cache and logs
+*.json
+*.txt
+!requirements.txt
+!Procfile
+!runtime.txt
+scanner_progress.txt
+accumulation_cache.json*
+seasonal_cache*.json

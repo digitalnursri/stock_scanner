@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accumulation Scanner | Stock Screener</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .scanner-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .scanner-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .scanner-title h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .scanner-filters {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-control {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-control label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-control select,
+        .filter-control input {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            min-width: 120px;
+            cursor: pointer;
+        }
+
+        .filter-control select option {
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            padding: 8px;
+        }
+
+        .filter-control select:focus,
+        .filter-control input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .btn-scan {
+            padding: 10px 24px;
+            background: linear-gradient(135deg, #f59e0b, #ef4444);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-scan:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+        }
+
+        .btn-scan:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Summary Cards */
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .summary-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .summary-card .card-value {
+            font-size: 2rem;
+            font-weight: 700;
+            display: block;
+        }
+
+        .summary-card .card-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .summary-card.breakout .card-value { color: #10b981; }
+        .summary-card.pre-breakout .card-value { color: #f59e0b; }
+        .summary-card.accumulation .card-value { color: var(--accent); }
+        .summary-card.total .card-value { color: var(--text); }
+
+        /* Tag Badges */
+        .tag-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        .tag-badge.breakout {
+            background: rgba(16, 185, 129, 0.15);
+            color: #10b981;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.2);
+        }
+
+        .tag-badge.pre-breakout {
+            background: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+        }
+
+        .tag-badge.accumulation-zone {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
+        /* Rule Indicators */
+        .rule-indicator {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            font-size: 0.7rem;
+            margin: 0 1px;
+        }
+
+        .rule-indicator.pass {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+
+        .rule-indicator.fail {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+        }
+
+        /* Score Bar */
+        .score-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .score-bar-fill {
+            width: 60px;
+            height: 6px;
+            background: var(--bg);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .score-bar-fill .fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        .score-bar-fill .fill.high { background: #10b981; }
+        .score-bar-fill .fill.medium { background: #f59e0b; }
+        .score-bar-fill .fill.low { background: #ef4444; }
+
+        /* Results Table */
+        .scanner-table-wrapper {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .scanner-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .scanner-table th {
+            background: var(--bg);
+            padding: 14px 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .scanner-table th:hover {
+            color: var(--accent);
+        }
+
+        .scanner-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.95rem;
+        }
+
+        .scanner-table tbody tr:hover {
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .scanner-table .ticker-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .scanner-table .ticker-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Legend */
+        .rules-legend {
+            margin-top: 24px;
+            padding: 20px;
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+
+        .rules-legend h4 {
+            margin-bottom: 16px;
+            font-size: 1rem;
+        }
+
+        .rules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+        }
+
+        .rule-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-size: 0.85rem;
+        }
+
+        .rule-item .rule-num {
+            background: var(--accent);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .rule-item .rule-desc strong {
+            display: block;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+
+        .rule-item .rule-desc span {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--border);
+            border-top-color: #f59e0b;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 1.1rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state h3 {
+            margin-bottom: 8px;
+        }
+
+        /* Tag filter buttons */
+        .tag-filter-group {
+            display: flex;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .tag-filter-btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tag-filter-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        @media (max-width: 768px) {
+            .scanner-filters {
+                width: 100%;
+            }
+
+            .filter-control {
+                flex: 1;
+            }
+
+            .scanner-table {
+                font-size: 0.85rem;
+            }
+
+            .scanner-table th,
+            .scanner-table td {
+                padding: 10px 8px;
+            }
+
+            .rule-indicator {
+                width: 18px;
+                height: 18px;
+                font-size: 0.6rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1 class="logo">📈 Stock<span class="accent">Screener</span></h1>
+                <span class="badge" style="background: linear-gradient(135deg, #f59e0b, #ef4444);">Accumulation</span>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+            </div>
+        </header>
+
+        <!-- Scanner Controls -->
+        <div class="scanner-header">
+            <div class="scanner-title">
+                <h2>🔍 Operator Accumulation Scanner</h2>
+            </div>
+            <div class="scanner-filters">
+                <div class="filter-control">
+                    <label>Tag Filter</label>
+                    <div class="tag-filter-group" id="tagFilter">
+                        <button class="tag-filter-btn active" data-tag="all">All</button>
+                        <button class="tag-filter-btn" data-tag="Breakout">🟢 Breakout</button>
+                        <button class="tag-filter-btn" data-tag="Pre-Breakout">🟠 Pre-Breakout</button>
+                        <button class="tag-filter-btn" data-tag="Accumulation Zone">🔵 Accumulation</button>
+                    </div>
+                </div>
+                <div class="filter-control">
+                    <label>Min Score</label>
+                    <input type="number" id="minScoreFilter" value="4" min="1" max="8" step="1">
+                </div>
+                <div class="filter-control">
+                    <label>Search</label>
+                    <input type="text" id="searchFilter" placeholder="Ticker..." style="min-width: 100px;">
+                </div>
+                <button class="btn-scan" id="scanBtn" onclick="loadScannerData()">
+                    🔍 Scan Stocks
+                </button>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards" id="summaryCards" style="display: none;">
+            <div class="summary-card total">
+                <span class="card-value" id="totalScanned">0</span>
+                <span class="card-label">Stocks Scanned</span>
+            </div>
+            <div class="summary-card accumulation">
+                <span class="card-value" id="accumulationCount">0</span>
+                <span class="card-label">🔵 Accumulation Zone</span>
+            </div>
+            <div class="summary-card pre-breakout">
+                <span class="card-value" id="preBreakoutCount">0</span>
+                <span class="card-label">🟠 Pre-Breakout</span>
+            </div>
+            <div class="summary-card breakout">
+                <span class="card-value" id="breakoutCount">0</span>
+                <span class="card-label">🟢 Breakout</span>
+            </div>
+        </div>
+
+        <!-- Results Table -->
+        <div class="scanner-table-wrapper" id="resultsContainer" style="display: none;">
+            <table class="scanner-table">
+                <thead>
+                    <tr>
+                        <th onclick="sortByColumn('ticker')">Ticker</th>
+                        <th onclick="sortByColumn('tag')">Tag</th>
+                        <th onclick="sortByColumn('score')">Score</th>
+                        <th onclick="sortByColumn('price')">Price</th>
+                        <th onclick="sortByColumn('price_range_30d')">Range 30D %</th>
+                        <th onclick="sortByColumn('vol_ratio')">Vol Ratio</th>
+                        <th onclick="sortByColumn('rsi')">RSI</th>
+                        <th onclick="sortByColumn('dma50_status')">DMA 50</th>
+                        <th>Rules (1-8)</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state" id="emptyState">
+            <h3>🔍 Operator Accumulation Scanner</h3>
+            <p>Detect stocks showing signs of smart money accumulation. Click "Scan Stocks" to begin.</p>
+            <p style="font-size: 0.85rem; margin-top: 12px;">
+                ⚠️ First scan may take 2-3 minutes as we analyze all Nifty 250 stocks.
+            </p>
+        </div>
+
+        <!-- Rules Legend -->
+        <div class="rules-legend">
+            <h4>📋 Detection Rules</h4>
+            <div class="rules-grid">
+                <div class="rule-item">
+                    <span class="rule-num">1</span>
+                    <div class="rule-desc">
+                        <strong>Consolidation</strong>
+                        <span>Price range ≤ 12% for 30-60 days</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">2</span>
+                    <div class="rule-desc">
+                        <strong>Low Volatility</strong>
+                        <span>ATR(14) decreasing trend</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">3</span>
+                    <div class="rule-desc">
+                        <strong>Volume Accumulation</strong>
+                        <span>20D avg vol > 50D avg vol</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">4</span>
+                    <div class="rule-desc">
+                        <strong>Delivery %</strong>
+                        <span>Avg delivery > 55% (if available)</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">5</span>
+                    <div class="rule-desc">
+                        <strong>Support Strength</strong>
+                        <span>Price above 50 DMA ≥70% of days</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">6</span>
+                    <div class="rule-desc">
+                        <strong>Hidden Buying</strong>
+                        <span>High vol + low change (≥2 days)</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">7</span>
+                    <div class="rule-desc">
+                        <strong>RSI Stability</strong>
+                        <span>RSI stays 40-60 for ≥70% of days</span>
+                    </div>
+                </div>
+                <div class="rule-item">
+                    <span class="rule-num">8</span>
+                    <div class="rule-desc">
+                        <strong>Not Overextended</strong>
+                        <span>Max move &lt; 20% in 30 days</span>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 16px; padding: 12px; background: var(--bg); border-radius: 8px; border-left: 4px solid #f59e0b;">
+                <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">
+                    <strong style="color: #f59e0b;">Tagging:</strong>
+                    🟢 <strong>Breakout</strong> = Close > 30D High + Volume > 2× avg &nbsp;|&nbsp;
+                    🟠 <strong>Pre-Breakout</strong> = Score ≥ 6/7 &nbsp;|&nbsp;
+                    🔵 <strong>Accumulation Zone</strong> = Score ≥ 4/7
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Scanning for accumulation patterns... This may take a few minutes.</div>
+    </div>
+
+    <script>
+        let allResults = [];
+        let sortColumn = 'score';
+        let sortDirection = 'desc';
+        let activeTag = 'all';
+
+        // Tag filter toggle
+        document.querySelectorAll('.tag-filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tag-filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                activeTag = btn.dataset.tag;
+                applyFiltersAndRender();
+            });
+        });
+
+        // Search filter
+        document.getElementById('searchFilter').addEventListener('input', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+
+        document.getElementById('minScoreFilter').addEventListener('change', function () {
+            if (allResults.length > 0) applyFiltersAndRender();
+        });
+
+        async function loadScannerData() {
+            const btn = document.getElementById('scanBtn');
+            const loading = document.getElementById('loadingOverlay');
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Scanning...';
+            loading.classList.add('active');
+
+            try {
+                const response = await fetch('/api/accumulation-scanner');
+                const data = await response.json();
+
+                if (data.status === 'calculating') {
+                    document.getElementById('emptyState').innerHTML = `
+                        <h3>⚙️ Initial Scan in Progress</h3>
+                        <p>${data.message}</p>
+                        <p style="font-size: 0.85rem; margin-top: 12px; color: #f59e0b;">
+                            Please wait 1-2 minutes and click "Scan Stocks" again.
+                        </p>
+                    `;
+                    document.getElementById('emptyState').style.display = 'block';
+                    document.getElementById('resultsContainer').style.display = 'none';
+                    document.getElementById('summaryCards').style.display = 'none';
+                } else if (data.stocks && data.stocks.length > 0) {
+                    allResults = data.stocks;
+                    
+                    // Update summary
+                    document.getElementById('totalScanned').textContent = data.total_scanned;
+                    document.getElementById('accumulationCount').textContent = data.breakdown.accumulation || 0;
+                    document.getElementById('preBreakoutCount').textContent = data.breakdown.pre_breakout || 0;
+                    document.getElementById('breakoutCount').textContent = data.breakdown.breakout || 0;
+
+                    document.getElementById('summaryCards').style.display = 'grid';
+                    document.getElementById('resultsContainer').style.display = 'block';
+                    document.getElementById('emptyState').style.display = 'none';
+
+                    applyFiltersAndRender();
+                } else {
+                    document.getElementById('emptyState').innerHTML = `
+                        <h3>📊 No Accumulation Patterns Found</h3>
+                        <p>No stocks currently match the accumulation criteria. Market conditions may not favor this pattern right now.</p>
+                    `;
+                    document.getElementById('emptyState').style.display = 'block';
+                    document.getElementById('resultsContainer').style.display = 'none';
+                    document.getElementById('summaryCards').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to load scan data. Please try again.');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Scan Stocks';
+                loading.classList.remove('active');
+            }
+        }
+
+        function applyFiltersAndRender() {
+            const minScore = parseInt(document.getElementById('minScoreFilter').value) || 0;
+            const searchQuery = document.getElementById('searchFilter').value.toUpperCase();
+
+            let filtered = allResults.filter(stock => {
+                if (activeTag !== 'all' && stock.tag !== activeTag) return false;
+                if (stock.score < minScore) return false;
+                if (searchQuery && !stock.ticker.toUpperCase().includes(searchQuery)) return false;
+                return true;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                let aVal = a[sortColumn];
+                let bVal = b[sortColumn];
+                if (aVal === undefined) aVal = 0;
+                if (bVal === undefined) bVal = 0;
+
+                if (typeof aVal === 'string') {
+                    return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                }
+                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+
+            // Render
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+
+            const ruleNames = ['consolidation', 'atr', 'volume', 'delivery', 'support', 'hidden_buying', 'rsi', 'overextended'];
+            const ruleLabels = ['C', 'A', 'V', 'D', 'S', 'H', 'R', 'O'];
+
+            filtered.forEach(stock => {
+                const row = document.createElement('tr');
+                
+                // Tag class
+                const tagClass = stock.tag.toLowerCase().replace(' ', '-');
+                
+                // Score bar
+                const scoreMax = stock.max_score || 7;
+                const scorePct = (stock.score / scoreMax) * 100;
+                const scoreColor = scorePct >= 75 ? 'high' : scorePct >= 50 ? 'medium' : 'low';
+
+                // Rule indicators
+                let ruleHTML = '';
+                ruleNames.forEach((rule, idx) => {
+                    const detail = stock.details[rule];
+                    const passed = detail ? (detail.pass || detail.triggered || false) : false;
+                    const cls = passed ? 'pass' : 'fail';
+                    const icon = passed ? '✓' : '✗';
+                    ruleHTML += `<span class="rule-indicator ${cls}" title="${ruleLabels[idx]}: ${rule}">${icon}</span>`;
+                });
+
+                row.innerHTML = `
+                    <td><a href="/stock/${stock.ticker}" class="ticker-link">${stock.ticker}</a></td>
+                    <td><span class="tag-badge ${tagClass}">${stock.tag}</span></td>
+                    <td>
+                        <div class="score-bar">
+                            <strong>${stock.score}/${scoreMax}</strong>
+                            <div class="score-bar-fill">
+                                <div class="fill ${scoreColor}" style="width: ${scorePct}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>₹${stock.price}</td>
+                    <td>${stock.price_range_30d}%</td>
+                    <td>${stock.vol_ratio}x</td>
+                    <td>${stock.rsi}</td>
+                    <td>${stock.dma50_status}</td>
+                    <td>${ruleHTML}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function sortByColumn(column) {
+            if (sortColumn === column) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortColumn = column;
+                sortDirection = column === 'ticker' ? 'asc' : 'desc';
+            }
+            if (allResults.length > 0) applyFiltersAndRender();
+        }
+    </script>
+</body>
+
+</html>

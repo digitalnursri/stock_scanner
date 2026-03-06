@@ -43,6 +43,10 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
         # Total years in dataset for Success Rate calculation
         total_years_analyzed = df['Date'].dt.year.nunique()
         
+        # Count total historical occurrences of each month
+        # (Denominator for Success Rate)
+        month_occurrences = df['Date'].dt.month_name().value_counts().to_dict()
+        
         moves = []
         moves_by_month = {}
         fall_moves_by_month = {}
@@ -242,7 +246,8 @@ def analyze_seasonal_patterns_v2(ticker, min_gain_percent=20, hist_data=None):
             'monthly_stats': formatted_stats,
             'best_months': best_months,
             'insights': insights,
-            'total_years': total_years_analyzed
+            'total_years': total_years_analyzed,
+            'month_availability': month_occurrences
         }
 
     except Exception as e:
