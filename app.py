@@ -654,7 +654,9 @@ def update_seasonal_cache():
     except Exception as e:
         print(f"Critical error in update_seasonal_cache: {e}")
 
+SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 ACCUMULATION_CACHE_FILE = 'accumulation_cache.json'
+VCP_CACHE_FILE = 'vcp_cache.json'
 ACCUMULATION_CACHE_TTL = 86400  # 24 hours
 
 @app.route('/accumulation-scanner')
@@ -730,6 +732,102 @@ def get_accumulation_data():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route('/vcp-scanner')
+def vcp_scanner():
+    """Render the VCP Breakout Scanner page."""
+    return render_template('vcp_scanner.html')
+
+@app.route('/api/vcp-results')
+def get_vcp_results():
+    """API endpoint for VCP scanner results with caching and background updates."""
+    import os
+    import json
+    from datetime import datetime, timedelta
+    from flask import request
+
+    try:
+        is_stale = False
+        if not os.path.exists(VCP_CACHE_FILE):
+            threading.Thread(target=update_vcp_cache, name="VCPInitialUpdater", daemon=True).start()
+            return jsonify({
+                'stocks': [],
+                'status': 'initializing'
+            })
+
+        with open(VCP_CACHE_FILE, 'r') as f:
+            cached_data = json.load(f)
+
+        updated_at = datetime.fromisoformat(cached_data.get('updated_at'))
+        if datetime.now() - updated_at > timedelta(hours=4):
+            is_stale = True
+            threading.Thread(target=update_vcp_cache, name="VCPCacheUpdater", daemon=True).start()
+
+        stocks = cached_data.get('stocks', [])
+        market_trend = cached_data.get('market_trend', {})
+        sector_rankings = cached_data.get('sector_rankings', [])
+        
+        # Sanitize everything before return
+        from vcp_detector import sanitize_data
+        return jsonify(sanitize_data({
+            'stocks': stocks[:10],
+            'market_trend': market_trend,
+            'sector_rankings': sector_rankings,
+            'updated_at': cached_data.get('updated_at'),
+            'status': 'stale_updating' if is_stale else 'fresh'
+        }))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+def update_vcp_cache():
+    """Background worker to refresh VCP scanner data."""
+    print("VCP Cache Update Started...")
+    from data_fetcher import get_nifty250_tickers, get_market_trend, get_sector_rankings
+    from vcp_detector import calculate_vcp_score
+    import yfinance as yf
+    import json
+    import os
+    from datetime import datetime
+
+    try:
+        tickers = get_nifty250_tickers()
+        market_trend = get_market_trend()
+        sector_rankings = get_sector_rankings()
+        
+        all_results = []
+        data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
+        
+        for ticker in tickers:
+            try:
+                stock_df = data[ticker] if ticker in data.columns.levels[0] else None
+                if stock_df is not None and not stock_df.empty:
+                    res = calculate_vcp_score(stock_df, ticker.replace('.NS', ''))
+                    if res:
+                        # Append sector info
+                        all_results.append(res)
+            except: continue
+
+        # Sort by: 1) Score (descending), 2) Absolute distance to resistance (ascending - closest to 0 first)
+        all_results.sort(key=lambda x: (-x['score'], abs(x['details']['resistance']['pct_below'])))
+        
+        cache_content = {
+            'stocks': all_results,
+            'market_trend': market_trend,
+            'sector_rankings': sector_rankings,
+            'updated_at': datetime.now().isoformat()
+        }
+
+        temp_file = VCP_CACHE_FILE + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(cache_content, f)
+        
+        if os.path.exists(VCP_CACHE_FILE): os.remove(VCP_CACHE_FILE)
+        os.rename(temp_file, VCP_CACHE_FILE)
+        print("VCP Cache Updated Successfully.")
+
+    except Exception as e:
+        print(f"Error in VCP background update: {e}")
 
 def update_accumulation_cache():
     """Background worker to refresh accumulation scanner data."""

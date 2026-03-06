@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMMS-VCP Breakout Scanner | India</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary);
+        }
+
+        .stat-label {
+            color: var(--text-dim);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .watchlist-container {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid #334155;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            background: #0f172a;
+            padding: 1rem;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #334155;
+            font-size: 0.9375rem;
+        }
+
+        .ticker {
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .tag-pill {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .tag-breakout {
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+
+        .tag-high {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
+
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(99, 102, 241, 0.1);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            transition: opacity 0.2s;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">SMMS-VCP AI Scanner</div>
+            <div id="update-info" style="font-size: 0.8rem; color: var(--text-dim);"></div>
+            <a href="/" class="btn" style="text-decoration: none;">Back to Home</a>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Nifty 50 Trend</div>
+                <div id="nifty-trend" class="stat-value">Loading...</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Top Sector</div>
+                <div id="top-sector" class="stat-value">Loading...</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Scans</div>
+                <div class="stat-value">250 Stocks</div>
+            </div>
+        </div>
+
+        <h2 style="margin-bottom: 1.5rem;">🔥 Top 10 Breakout Watchlist</h2>
+        <div class="watchlist-container">
+            <table id="vcp-table">
+                <thead>
+                    <tr>
+                        <th>Stock</th>
+                        <th>Tag</th>
+                        <th>Price</th>
+                        <th>Resistance</th>
+                        <th>Buy Info</th>
+                        <th>Target (15-40%)</th>
+                        <th>Stop Loss</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody id="vcp-body">
+                    <!-- Data here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="loading" class="loading-overlay">
+        <div style="text-align: center;">
+            <div class="spinner"></div>
+            <p style="margin-top: 1rem;">Scanning Nifty 250 Market...<br><small>This may take 30-60 seconds</small></p>
+        </div>
+    </div>
+
+    <script>
+        async function fetchResults() {
+            const loading = document.getElementById('loading');
+            try {
+                const response = await fetch('/api/vcp-results');
+                const data = await response.json();
+
+                if (data.status === 'initializing') {
+                    loading.style.display = 'flex';
+                    setTimeout(fetchResults, 10000);
+                    return;
+                }
+
+                loading.style.display = 'none';
+
+                // Update Trend Info
+                const trendEl = document.getElementById('nifty-trend');
+                trendEl.textContent = data.market_trend.uptrend ? 'Bullish 📈' : 'Cautious 📉';
+                trendEl.style.color = data.market_trend.uptrend ? 'var(--success)' : 'var(--danger)';
+
+                const sectorEl = document.getElementById('top-sector');
+                if (data.sector_rankings.length > 0) {
+                    sectorEl.textContent = data.sector_rankings[0].sector;
+                }
+
+                document.getElementById('update-info').textContent = 'Last Updated: ' + new Date(data.updated_at).toLocaleString();
+
+                // Update Table
+                const body = document.getElementById('vcp-body');
+                body.innerHTML = '';
+
+                data.stocks.forEach(s => {
+                    const row = document.createElement('tr');
+                    const tagClass = s.tag.includes('Breakout') ? 'tag-breakout' : 'tag-high';
+                    row.innerHTML = `
+                        <td class="ticker">${s.ticker}</td>
+                        <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
+                        <td>₹${s.price}</td>
+                        <td style="color: var(--warning)">
+                            <div>₹${s.resistance}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-dim)">${Math.abs(s.details.resistance.pct_below)}% away</div>
+                        </td>
+                        <td>
+                            <div style="font-size: 0.8rem; color: var(--text-dim)">Range:</div>
+                            <div style="font-weight: 600; color: #818cf8;">${s.recommended_buy_price || 'N/A'}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-dim)">Stop: ₹${s.buy_stop_price || 'N/A'}</div>
+                        </td>
+                        <td style="color: var(--success); font-weight: 600;">${s.target}</td>
+                        <td style="color: var(--danger)">₹${s.stop_loss}</td>
+                        <td><strong>${s.score}/7</strong></td>
+                    `;
+                    body.appendChild(row);
+                });
+
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        window.onload = fetchResults;
+    </script>
+</body>
+
+</html>

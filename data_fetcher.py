@@ -2,6 +2,7 @@ import nselib
 from nselib import capital_market
 import yfinance as yf
 import pandas as pd
+import concurrent.futures
 
 def get_nifty250_tickers():
     """
@@ -34,14 +35,8 @@ def get_nifty250_tickers():
         print(f"Error fetching tickers via nselib: {e}")
         return []
 
-import concurrent.futures
-
 def calculate_rsi(series, period=14):
-    """
-    Calculates RSI using Simple Moving Average (SMA) as per Groww.in article.
-    RS = Average Gain / Average Loss
-    Average Gain = Sum of Gains over N periods / N
-    """
+    """Calculates RSI."""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -57,178 +52,142 @@ def get_market_cap(ticker):
         return 0
 
 def get_realtime_data(tickers):
-    """
-    Fetches real-time data and technicals (RSI, DMA) for the given tickers.
-    """
-    if not tickers:
-        return pd.DataFrame()
+    """Fetches real-time data and technicals (RSI, DMA) for the given tickers."""
+    if not tickers: return pd.DataFrame()
 
-    print(f"Fetching price data for {len(tickers)} stocks (1y history)...")
-    # Fetch 1y history for DMAs
+    print(f"Fetching price data for {len(tickers)} stocks...")
     try:
-        data = yf.download(tickers, period="1y", group_by='ticker', progress=True, threads=True)
+        data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
     except Exception as e:
         print(f"Error fetching batch data: {e}")
         return pd.DataFrame()
 
-    # Fetch Market Caps in parallel
-    print(f"Fetching Market Caps for {len(tickers)} stocks...")
+    print(f"Fetching Market Caps...")
     market_caps = {}
-    
-    # yfinance Tickers object can be used to get info for multiple stocks
-    # however, we'll stick to ThreadPoolExecutor but increase workers and handle it slightly better
     with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
         future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
         for future in concurrent.futures.as_completed(future_to_ticker):
             ticker = future_to_ticker[future]
-            try:
-                market_caps[ticker] = future.result()
-            except Exception:
-                market_caps[ticker] = 0
+            try: market_caps[ticker] = future.result()
+            except: market_caps[ticker] = 0
 
     stock_list = []
-    
     for ticker in tickers:
         try:
-            # Handle multi-level columns if multiple tickers
             if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data.columns.levels[0]: # Verify ticker is in data
-                    df = data[ticker].copy()
-                else:
-                    continue
+                if ticker in data.columns.levels[0]:
+                    df = data[ticker].copy().dropna()
+                else: continue
             else:
-                 # Single ticker case (unlikely with this list but safe to handle)
-                df = data.copy() if data.shape[1] > 0 else pd.DataFrame()
+                df = data.copy().dropna()
             
-            if df.empty:
-                continue
+            if len(df) < 50: continue
                 
-            # Calculate Technicals
-            # DMA - Use Adjusted Close for long term averages to account for splits/dividends
-            # This is the industry standard "best approach" for historical moving averages.
-            # Using 'Adj Close' if available, else 'Close'.
             price_series = df['Adj Close'] if 'Adj Close' in df else df['Close']
-            
             df['DMA50'] = price_series.rolling(window=50).mean()
             df['DMA100'] = price_series.rolling(window=100).mean()
             df['DMA200'] = price_series.rolling(window=200).mean()
-            
-            # RSI - Typically calculated on standard 'Close'
             df['RSI'] = calculate_rsi(df['Close'])
 
-            # Get latest valid row
             last_row = df.iloc[-1]
-            
-            # Extract values
-            price = round(last_row['Close'], 2) if pd.notna(last_row['Close']) else 0
+            price = round(last_row['Close'], 2)
             rsi_val = round(last_row['RSI'], 2) if pd.notna(last_row['RSI']) else None
             dma50_val = round(last_row['DMA50'], 2) if pd.notna(last_row['DMA50']) else None
-            dma100_val = round(last_row['DMA100'], 2) if pd.notna(last_row['DMA100']) else None
             dma200_val = round(last_row['DMA200'], 2) if pd.notna(last_row['DMA200']) else None
             
-            # ===== PROFESSIONAL TECHNICAL ANALYSIS =====
-            score = 0  # Positive = Bullish, Negative = Bearish
-            reasons = []
-            
-            # 1. TREND ANALYSIS (Price vs DMAs)
-            # Price above all DMAs = Strong Uptrend (+3)
-            # Price below all DMAs = Strong Downtrend (-3)
-            if dma50_val and dma100_val and dma200_val:
-                if price > dma50_val and price > dma100_val and price > dma200_val:
-                    score += 3
-                    reasons.append("Strong Uptrend")
-                elif price < dma50_val and price < dma100_val and price < dma200_val:
-                    score -= 3
-                    reasons.append("Strong Downtrend")
-                elif price > dma200_val:
-                    score += 1  # Above long-term trend
-                elif price < dma200_val:
-                    score -= 1  # Below long-term trend
-            
-            # 2. GOLDEN CROSS / DEATH CROSS (DMA50 vs DMA200)
-            # Golden Cross (50 > 200) = Bullish (+2)
-            # Death Cross (50 < 200) = Bearish (-2)
+            score = 0
             if dma50_val and dma200_val:
-                if dma50_val > dma200_val:
-                    score += 2
-                    if "Uptrend" not in str(reasons):
-                        reasons.append("Golden Cross")
-                else:
-                    score -= 2
-                    if "Downtrend" not in str(reasons):
-                        reasons.append("Death Cross")
+                if price > dma50_val: score += 1
+                if dma50_val > dma200_val: score += 2
             
-            # 3. RSI ANALYSIS (Momentum)
             if rsi_val:
-                if rsi_val < 30:
-                    score += 3  # Oversold - Strong Buy opportunity
-                    reasons.append("Oversold")
-                elif rsi_val < 40:
-                    score += 1  # Approaching oversold
-                elif rsi_val > 70:
-                    score -= 3  # Overbought - Strong Sell signal
-                    reasons.append("Overbought")
-                elif rsi_val > 60:
-                    score -= 1  # Approaching overbought
-            
-            # 4. PRICE MOMENTUM (Distance from DMA200)
-            if dma200_val and price > 0:
-                pct_from_200 = ((price - dma200_val) / dma200_val) * 100
-                if pct_from_200 > 20:
-                    score -= 1  # Too extended above 200 DMA
-                elif pct_from_200 < -20:
-                    score += 1  # Deeply discounted below 200 DMA
-            
-            # ===== DETERMINE SIGNAL =====
-            if score >= 3:
-                signal = "Bullish"
-            elif score <= -3:
-                signal = "Bearish"
-            else:
-                signal = "Neutral"
-            
-            # ===== PROFESSIONAL SUGGESTION =====
-            # Strong Buy: Good fundamentals + Oversold + Uptrend potential
-            # Buy: Bullish with good entry point
-            # Hold: Mixed signals or already positioned
-            # Sell: Bearish with exit indicators
-            # Strong Sell: Overbought + Downtrend
-            
-            if score >= 5:
-                suggestion = "Strong Buy"
-            elif score >= 3:
-                suggestion = "Buy"
-            elif score >= 1:
-                suggestion = "Hold"
-            elif score >= -2:
-                suggestion = "Hold"
-            elif score >= -4:
-                suggestion = "Sell"
-            else:
-                suggestion = "Strong Sell"
-            
-            # Format Market Cap
+                if rsi_val < 30: score += 3
+                elif rsi_val > 70: score -= 3
+
+            signal = "Bullish" if score >= 3 else "Bearish" if score <= -3 else "Neutral"
+            suggestion = "Strong Buy" if score >= 5 else "Buy" if score >= 3 else "Hold" if score >= -2 else "Sell"
+
             mc = market_caps.get(ticker, 0)
             mc_formatted = f"{mc / 1e7:.2f} Cr" if mc else "N/A"
 
-            stock_info = {
+            stock_list.append({
                 'Ticker': ticker.replace('.NS', ''),
                 'Price': price,
-                'Open': round(last_row['Open'], 2) if pd.notna(last_row['Open']) else 0,
-                'High': round(last_row['High'], 2) if pd.notna(last_row['High']) else 0,
-                'Low': round(last_row['Low'], 2) if pd.notna(last_row['Low']) else 0,
                 'Market Cap': mc_formatted,
                 'RSI': rsi_val if rsi_val else 'N/A',
                 'DMA 50': dma50_val if dma50_val else 'N/A',
-                'DMA 100': dma100_val if dma100_val else 'N/A',
                 'DMA 200': dma200_val if dma200_val else 'N/A',
                 'Signal': signal,
                 'Suggestion': suggestion,
                 'Score': score,
-            }
-            stock_list.append(stock_info)
-        except Exception as e:
-            # print(f"Error processing {ticker}: {e}")
-            continue
+            })
+        except: continue
             
     return pd.DataFrame(stock_list)
+
+def get_sector_rankings():
+    """Ranks sectors based on 1m and 3m performance."""
+    sector_map = {
+        'NIFTY IT': '^CNXIT', 'NIFTY BANK': '^CNXBNK', 'NIFTY AUTO': '^CNXAUTO',
+        'NIFTY PHARMA': '^CNXPHARMA', 'NIFTY FMCG': '^CNXFMCG', 'NIFTY METAL': '^CNXMETAL',
+        'NIFTY REALTY': '^CNXREALTY', 'NIFTY ENERGY': '^CNXENERGY', 'NIFTY INFRA': '^CNXINFRA',
+        'NIFTY MEDIA': '^CNXMEDIA', 'NIFTY PSE': '^CNXPSE'
+    }
+    rankings = []
+    try:
+        import yfinance as yf
+        # Fetching each one separately is slow but more reliable for this specific logic
+        for name, ticker in sector_map.items():
+            try:
+                s_df = yf.download(ticker, period="6mo", progress=False)
+                if s_df.empty: continue
+                
+                close = s_df['Close'].dropna()
+                if len(close) < 65: continue
+                
+                # Handle possible MultiIndex from single download
+                if isinstance(close, pd.DataFrame): close = close.iloc[:, 0]
+                
+                perf_1m = ((close.iloc[-1] - close.iloc[-21]) / close.iloc[-21]) * 100
+                perf_3m = ((close.iloc[-1] - close.iloc[-63]) / close.iloc[-63]) * 100
+                
+                rankings.append({
+                    'sector': name, 'ticker': ticker,
+                    'perf_1m': round(float(perf_1m), 2),
+                    'perf_3m': round(float(perf_3m), 2),
+                    'score': round(float(perf_1m * 0.6 + perf_3m * 0.4), 2)
+                })
+            except: continue
+        return sorted(rankings, key=lambda x: x['score'], reverse=True)
+    except Exception as e:
+        print(f"Error ranking sectors: {e}")
+        return []
+
+def get_market_trend():
+    """Checks if Nifty 50 is above 50 DMA."""
+    try:
+        import yfinance as yf
+        nifty = yf.download('^NSEI', period='6mo', progress=False)
+        if nifty.empty: return {'nifty_price': 0, 'nifty_sma50': 0, 'trend_up': False, 'uptrend': False}
+        
+        close_series = nifty['Close']
+        if isinstance(close_series, pd.DataFrame): close_series = close_series.iloc[:, 0]
+            
+        current_price = close_series.iloc[-1]
+        sma50_series = close_series.rolling(window=50).mean()
+        
+        if len(sma50_series) < 5:
+             return {'nifty_price': round(float(current_price), 2), 'nifty_sma50': 0, 'trend_up': False, 'uptrend': False}
+
+        sma50 = sma50_series.iloc[-1]
+        sma50_prev = sma50_series.iloc[-5]
+        
+        return {
+            'nifty_price': round(float(current_price), 2),
+            'nifty_sma50': round(float(sma50), 2),
+            'trend_up': bool(current_price > sma50 and sma50 > sma50_prev),
+            'uptrend': bool(current_price > sma50)
+        }
+    except Exception as e:
+        print(f"Error in get_market_trend: {e}")
+        return {'nifty_price': 0, 'nifty_sma50': 0, 'trend_up': False, 'uptrend': False}
