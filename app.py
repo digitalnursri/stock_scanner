@@ -807,6 +807,11 @@ def vcp_scanner():
     """Render the VCP Breakout Scanner page."""
     return render_template('vcp_scanner.html')
 
+@app.route('/health')
+def health_check():
+    """Lightweight health check endpoint for keep-alive pings."""
+    return 'ok', 200
+
 @app.route('/api/vcp-results')
 def get_vcp_results():
     """API endpoint for VCP scanner results with caching and background updates."""
