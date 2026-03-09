@@ -46,6 +46,7 @@ CACHE = {
 }
 
 CACHE_DURATION = 300  # 5 minutes
+MARKET_DATA_CACHE_FILE = 'market_data_cache.json'  # Persist cache to file
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
@@ -85,8 +86,10 @@ def save_analytics_cache(ticker, category, data, params=None):
 def get_market_data():
     """
     Fetches data from source or cache.
+    Returns cached data immediately, triggers background update if stale.
     """
     with CACHE["lock"]:
+        # If in-memory cache exists, use it
         if CACHE["data"] is not None:
             # If data is stale, trigger background update but return stale data
             if (time.time() - CACHE["last_updated"] > CACHE_DURATION):
@@ -94,8 +97,22 @@ def get_market_data():
                 if not is_running:
                     threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
             return CACHE["data"]
+        
+        # Try to load from file cache (for fast startup after deploy)
+        if os.path.exists(MARKET_DATA_CACHE_FILE):
+            try:
+                with open(MARKET_DATA_CACHE_FILE, 'r') as f:
+                    file_cache = json.load(f)
+                CACHE["data"] = file_cache.get('data', [])
+                CACHE["last_updated"] = file_cache.get('updated', 0)
+                print(f"[CACHE] Loaded {len(CACHE['data'])} stocks from file cache")
+                # Trigger background refresh
+                threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+                return CACHE["data"]
+            except Exception as e:
+                print(f"[CACHE] Failed to load file cache: {e}")
             
-    # Initial fetch if cache is empty
+    # No cache available - fetch synchronously (only happens once)
     return refresh_main_cache()
 
 def refresh_main_cache():
@@ -111,6 +128,14 @@ def refresh_main_cache():
         with CACHE["lock"]:
             CACHE["data"] = data
             CACHE["last_updated"] = time.time()
+        
+        # Save to file for fast startup after deploy
+        try:
+            with open(MARKET_DATA_CACHE_FILE, 'w') as f:
+                json.dump({'data': data, 'updated': time.time()}, f)
+            print(f"[CACHE] Saved {len(data)} stocks to file cache")
+        except Exception as e:
+            print(f"[CACHE] Failed to save file cache: {e}")
         
         # Emit real-time update to all connected clients
         try:
@@ -149,8 +174,32 @@ start_market_data_auto_update()
 
 @app.route('/')
 def index():
-    stocks = get_market_data()
-    return render_template('index.html', stocks=stocks)
+    """Home page - returns cached data immediately, fetches in background if needed"""
+    with CACHE["lock"]:
+        if CACHE["data"] is not None:
+            return render_template('index.html', stocks=CACHE["data"])
+    
+    # No cache - check file cache
+    if os.path.exists(MARKET_DATA_CACHE_FILE):
+        try:
+            with open(MARKET_DATA_CACHE_FILE, 'r') as f:
+                file_cache = json.load(f)
+            stocks = file_cache.get('data', [])
+            with CACHE["lock"]:
+                CACHE["data"] = stocks
+                CACHE["last_updated"] = file_cache.get('updated', 0)
+            # Trigger background refresh
+            threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+            return render_template('index.html', stocks=stocks)
+        except:
+            pass
+    
+    # No cache at all - return empty with loading state, fetch in background
+    is_running = any(t.name == "MainCacheUpdater" for t in threading.enumerate())
+    if not is_running:
+        threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+    
+    return render_template('index.html', stocks=[], loading=True)
 
 @app.route('/api/refresh')
 def refresh():
