@@ -9,6 +9,40 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+            margin-left: 10px;
+        }
+        .live-indicator.offline {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .last-updated {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-left: 10px;
+        }
+    </style>
 </head>
 
 <body>
@@ -96,6 +130,11 @@
         <!-- Stats -->
         <div class="stats">
             <span id="stockCount">{{ stocks|length }} stocks</span>
+            <span id="liveStatus" class="live-indicator offline">
+                <span class="live-dot"></span>
+                <span id="liveText">Connecting...</span>
+            </span>
+            <span id="lastUpdated" class="last-updated"></span>
             <div class="legend">
                 <span class="legend-item"><span class="dot green"></span>Bullish</span>
                 <span class="legend-item"><span class="dot red"></span>Bearish</span>
@@ -250,9 +289,84 @@
             sortTable();
         }
 
-        // Initial sort by score
+        // Socket.IO for real-time updates
+        let socket;
+
+        function initSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to real-time updates');
+                updateLiveStatus(true);
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from real-time updates');
+                updateLiveStatus(false);
+            });
+            
+            socket.on('market_data_update', function(data) {
+                console.log('Received real-time market data update');
+                updateTableWithNewData(data.stocks);
+                document.getElementById('lastUpdated').textContent = 'Updated: ' + new Date(data.updated_at).toLocaleTimeString();
+            });
+        }
+
+        function updateLiveStatus(isConnected) {
+            const statusEl = document.getElementById('liveStatus');
+            const textEl = document.getElementById('liveText');
+            
+            if (isConnected) {
+                statusEl.classList.remove('offline');
+                textEl.textContent = 'Live';
+            } else {
+                statusEl.classList.add('offline');
+                textEl.textContent = 'Offline';
+            }
+        }
+
+        function updateTableWithNewData(stocks) {
+            const tbody = document.querySelector("#stockTable tbody");
+            tbody.innerHTML = '';
+            
+            stocks.forEach(stock => {
+                const row = document.createElement('tr');
+                row.setAttribute('data-price', stock.Price);
+                row.setAttribute('data-rsi', stock.RSI);
+                row.setAttribute('data-dma50', stock['DMA 50']);
+                row.setAttribute('data-dma200', stock['DMA 200']);
+                row.setAttribute('data-mcap', stock['Market Cap']);
+                row.setAttribute('data-signal', stock.Signal);
+                row.setAttribute('data-suggestion', stock.Suggestion);
+                row.setAttribute('data-score', stock.Score);
+                
+                const rsiClass = stock.RSI < 30 ? 'rsi-low' : stock.RSI > 70 ? 'rsi-high' : '';
+                const scoreClass = stock.Score > 0 ? 'positive' : stock.Score < 0 ? 'negative' : '';
+                
+                row.innerHTML = `
+                    <td class="ticker"><a href="/stock/${stock.Ticker}">${stock.Ticker}</a></td>
+                    <td class="price">₹${stock.Price}</td>
+                    <td class="mcap">${stock['Market Cap']}</td>
+                    <td class="rsi ${rsiClass}">${stock.RSI}</td>
+                    <td>${stock['DMA 50']}</td>
+                    <td>${stock['DMA 100']}</td>
+                    <td>${stock['DMA 200']}</td>
+                    <td><span class="signal-badge ${stock.Signal.toLowerCase()}">${stock.Signal}</span></td>
+                    <td><span class="action-badge ${stock.Suggestion.toLowerCase().replace(' ', '-')}">${stock.Suggestion}</span></td>
+                    <td class="score ${scoreClass}">${stock.Score}</td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            document.getElementById('stockCount').textContent = stocks.length + ' stocks';
+            applyFilters();
+            sortTable();
+        }
+
+        // Initial sort by score and init socket
         window.onload = function () {
             sortTable();
+            initSocket();
         };
     </script>
 </body>

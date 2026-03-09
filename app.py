@@ -1,15 +1,42 @@
 from flask import Flask, render_template, jsonify
+from flask_socketio import SocketIO, emit
 from data_fetcher import get_nifty250_tickers, get_realtime_data
 import pandas as pd
 import time
 import threading
 
+# App version - increment on each deployment for cache busting
+APP_VERSION = "3.1.0"
+
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'
+app.config['TEMPLATES_AUTO_RELOAD'] = True  # Force template reload on every request
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Inject version into all templates for cache busting
+@app.context_processor
+def inject_version():
+    return {'app_version': APP_VERSION}
+
+# Set no-cache headers for HTML pages to prevent stale content
+@app.after_request
+def add_cache_headers(response):
+    if response.content_type and 'text/html' in response.content_type:
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 import os
 import json
 import threading
 from datetime import datetime, timedelta
+
+# Import paper trading module
+from paper_trading import (
+    execute_paper_trade, check_and_update_trades, get_active_trades,
+    get_trade_history, get_performance_stats, load_active_trades_from_disk
+)
 
 # Global cache
 CACHE = {
@@ -84,8 +111,41 @@ def refresh_main_cache():
         with CACHE["lock"]:
             CACHE["data"] = data
             CACHE["last_updated"] = time.time()
+        
+        # Emit real-time update to all connected clients
+        try:
+            socketio.emit('market_data_update', {
+                'stocks': data,
+                'updated_at': datetime.now().isoformat()
+            }, namespace='/')
+            print("Real-time market data update emitted.")
+        except Exception as e:
+            print(f"Socket emit error (non-critical): {e}")
+        
         return data
     return []
+
+
+def start_market_data_auto_update():
+    """Start automatic market data updates every 2 minutes."""
+    def auto_update_loop():
+        while True:
+            try:
+                time.sleep(120)  # 2 minutes
+                print("Auto-triggering market data update...")
+                with CACHE["lock"]:
+                    CACHE["last_updated"] = 0
+                refresh_main_cache()
+            except Exception as e:
+                print(f"Market data auto update error: {e}")
+    
+    thread = threading.Thread(target=auto_update_loop, name="MarketDataAutoUpdater", daemon=True)
+    thread.start()
+    print("Market data auto-update started (every 2 minutes)")
+
+
+# Start auto-update on startup
+start_market_data_auto_update()
 
 @app.route('/')
 def index():
@@ -651,6 +711,16 @@ def update_seasonal_cache():
         # Final Summary
         print(f"Background update complete. {len(results)} stocks total cached.")
         
+        # Emit real-time update
+        try:
+            socketio.emit('seasonal_cache_updated', {
+                'total_stocks': len(results),
+                'updated_at': datetime.now().isoformat()
+            }, namespace='/')
+            print("Seasonal cache update notification emitted.")
+        except Exception as e:
+            print(f"Socket emit error (non-critical): {e}")
+        
     except Exception as e:
         print(f"Critical error in update_seasonal_cache: {e}")
 
@@ -784,7 +854,7 @@ def update_vcp_cache():
     """Background worker to refresh VCP scanner data."""
     print("VCP Cache Update Started...")
     from data_fetcher import get_nifty250_tickers, get_market_trend, get_sector_rankings
-    from vcp_detector import calculate_vcp_score
+    from vcp_detector import calculate_vcp_score, sanitize_data
     import yfinance as yf
     import json
     import os
@@ -825,9 +895,73 @@ def update_vcp_cache():
         if os.path.exists(VCP_CACHE_FILE): os.remove(VCP_CACHE_FILE)
         os.rename(temp_file, VCP_CACHE_FILE)
         print("VCP Cache Updated Successfully.")
+        
+        # Emit real-time update to all connected clients
+        try:
+            socketio.emit('vcp_update', sanitize_data({
+                'stocks': all_results[:10],
+                'market_trend': market_trend,
+                'sector_rankings': sector_rankings,
+                'updated_at': cache_content['updated_at'],
+                'status': 'fresh'
+            }), namespace='/')
+            print("Real-time VCP update emitted to clients.")
+        except Exception as emit_err:
+            print(f"Socket emit error (non-critical): {emit_err}")
+        
+        # Auto-execute paper trades on high-quality VCP signals
+        try:
+            auto_execute_vcp_trades(all_results)
+        except Exception as trade_err:
+            print(f"Auto-trade execution error (non-critical): {trade_err}")
 
     except Exception as e:
         print(f"Error in VCP background update: {e}")
+
+
+# WebSocket event handlers for real-time updates
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection."""
+    print('Client connected to WebSocket')
+    emit('connected', {'message': 'Connected to real-time updates'})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection."""
+    print('Client disconnected from WebSocket')
+
+
+@socketio.on('request_vcp_update')
+def handle_vcp_update_request():
+    """Handle manual update request from client."""
+    print('Client requested VCP update')
+    # Trigger background update
+    is_updating = any(t.name == "VCPCacheUpdater" for t in threading.enumerate())
+    if not is_updating:
+        threading.Thread(target=update_vcp_cache, name="VCPCacheUpdater", daemon=True).start()
+    emit('update_started', {'message': 'VCP scan started'})
+
+
+def start_vcp_auto_update():
+    """Start automatic VCP updates every 5 minutes."""
+    def auto_update_loop():
+        while True:
+            try:
+                time.sleep(300)  # 5 minutes
+                print("Auto-triggering VCP update...")
+                update_vcp_cache()
+            except Exception as e:
+                print(f"Auto update error: {e}")
+    
+    thread = threading.Thread(target=auto_update_loop, name="VCPAutoUpdater", daemon=True)
+    thread.start()
+    print("VCP auto-update started (every 5 minutes)")
+
+
+# Start auto-update on startup
+start_vcp_auto_update()
 
 def update_accumulation_cache():
     """Background worker to refresh accumulation scanner data."""
@@ -860,6 +994,20 @@ def update_accumulation_cache():
             os.rename(temp_file, ACCUMULATION_CACHE_FILE)
             
             print(f"Accumulation cache updated: {result['total_matched']} stocks matched out of {result['total_scanned']} scanned.")
+            
+            # Emit real-time update
+            try:
+                socketio.emit('accumulation_update', {
+                    'stocks': result['stocks'][:20],
+                    'total_scanned': result['total_scanned'],
+                    'total_matched': result['total_matched'],
+                    'breakdown': result['breakdown'],
+                    'updated_at': cache_content['updated_at'],
+                    'status': 'fresh'
+                }, namespace='/')
+                print("Real-time accumulation update emitted.")
+            except Exception as emit_err:
+                print(f"Socket emit error (non-critical): {emit_err}")
         else:
             print(f"Accumulation scan error: {result['error']}")
 
@@ -869,6 +1017,166 @@ def update_accumulation_cache():
         traceback.print_exc()
 
 
+# ==================== PAPER TRADING API ENDPOINTS ====================
+
+@app.route('/api/paper-trading/stats')
+def get_paper_trading_stats():
+    """Get paper trading performance statistics"""
+    try:
+        days = int(request.args.get('days', 30))
+        stats = get_performance_stats(days=days)
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper-trading/active-trades')
+def get_active_trades_api():
+    """Get all currently active paper trades"""
+    try:
+        trades = get_active_trades()
+        return jsonify({'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper-trading/trade-history')
+def get_trade_history_api():
+    """Get paper trading history"""
+    try:
+        limit = int(request.args.get('limit', 100))
+        days = int(request.args.get('days', 30))
+        trades = get_trade_history(limit=limit, days=days)
+        return jsonify({'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper-trading/execute', methods=['POST'])
+def execute_manual_trade():
+    """Manually execute a paper trade"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        trade = execute_paper_trade(data)
+        if trade:
+            return jsonify({'success': True, 'trade': trade})
+        else:
+            return jsonify({'success': False, 'message': 'Trade not executed (may already have active trade for this ticker)'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def auto_execute_vcp_trades(vcp_results):
+    """
+    Automatically execute paper trades on VCP signals
+    Called after VCP cache update
+    """
+    executed = []
+    
+    for stock in vcp_results[:5]:  # Only top 5 signals
+        # Only trade on high probability setups
+        if stock.get('score', 0) >= 5:
+            trade = execute_paper_trade(stock)
+            if trade:
+                executed.append(trade)
+                # Emit real-time notification
+                try:
+                    socketio.emit('new_paper_trade', {
+                        'ticker': trade['ticker'],
+                        'entry_price': trade['entry_price'],
+                        'target': f"₹{trade['target_low']}-₹{trade['target_high']}",
+                        'stop_loss': trade['stop_loss']
+                    }, namespace='/')
+                except:
+                    pass
+    
+    if executed:
+        print(f"[AUTO TRADE] Executed {len(executed)} paper trades from VCP signals")
+    
+    return executed
+
+
+def update_paper_trades_with_market_data():
+    """
+    Check active trades against current market prices
+    Run this periodically to update P&L and close trades
+    """
+    try:
+        # Get current prices for active trades
+        active_trades = get_active_trades()
+        if not active_trades:
+            return
+        
+        tickers = [t['ticker'] for t in active_trades]
+        ticker_symbols = [f"{t}.NS" for t in tickers]
+        
+        import yfinance as yf
+        data = yf.download(ticker_symbols, period="1d", interval="1m", progress=False)
+        
+        current_prices = {}
+        for ticker in tickers:
+            try:
+                full_ticker = f"{ticker}.NS"
+                if isinstance(data.columns, pd.MultiIndex):
+                    if full_ticker in data.columns.levels[0]:
+                        price = data[full_ticker]['Close'].iloc[-1]
+                        current_prices[ticker] = float(price)
+                else:
+                    price = data['Close'].iloc[-1]
+                    current_prices[ticker] = float(price)
+            except:
+                continue
+        
+        # Check and update trades
+        closed_trades = check_and_update_trades(current_prices)
+        
+        # Emit updates for closed trades
+        for closed in closed_trades:
+            try:
+                socketio.emit('trade_closed', {
+                    'ticker': closed['ticker'],
+                    'pnl': closed['pnl'],
+                    'reason': closed['reason']
+                }, namespace='/')
+            except:
+                pass
+        
+        # Emit active trades update
+        try:
+            active = get_active_trades()
+            socketio.emit('active_trades_update', {
+                'trades': active,
+                'count': len(active)
+            }, namespace='/')
+        except:
+            pass
+        
+    except Exception as e:
+        print(f"Error updating paper trades: {e}")
+
+
+def start_paper_trading_monitor():
+    """Start background thread to monitor paper trades"""
+    def monitor_loop():
+        while True:
+            try:
+                time.sleep(60)  # Check every minute
+                update_paper_trades_with_market_data()
+            except Exception as e:
+                print(f"Paper trading monitor error: {e}")
+    
+    thread = threading.Thread(target=monitor_loop, name="PaperTradingMonitor", daemon=True)
+    thread.start()
+    print("Paper trading monitor started (checking every 60 seconds)")
+
+
+# Start paper trading monitor on startup
+start_paper_trading_monitor()
+
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)
 

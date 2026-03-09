@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         .scanner-header {
             display: flex;
@@ -741,6 +742,62 @@
             }
             if (allResults.length > 0) applyFiltersAndRender();
         }
+
+        // Socket.IO for real-time updates
+        let socket;
+        let isConnected = false;
+
+        function initSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to real-time updates');
+                isConnected = true;
+                showNotification('Connected to live updates', 'success');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from real-time updates');
+                isConnected = false;
+                showNotification('Disconnected from live updates', 'warning');
+            });
+            
+            socket.on('accumulation_update', function(data) {
+                console.log('Accumulation data updated:', data);
+                showNotification(`Accumulation scan refreshed! ${data.total_matched} stocks found.`, 'success');
+                // Update data if user is viewing
+                if (document.getElementById('resultsContainer').style.display !== 'none') {
+                    allResults = data.stocks;
+                    document.getElementById('totalScanned').textContent = data.total_scanned;
+                    document.getElementById('accumulationCount').textContent = data.breakdown.accumulation || 0;
+                    document.getElementById('preBreakoutCount').textContent = data.breakdown.pre_breakout || 0;
+                    document.getElementById('breakoutCount').textContent = data.breakdown.breakout || 0;
+                    applyFiltersAndRender();
+                }
+            });
+        }
+
+        function showNotification(message, type) {
+            const notif = document.createElement('div');
+            notif.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 8px;
+                color: white;
+                font-weight: 500;
+                z-index: 9999;
+                animation: slideIn 0.3s ease;
+                background: ${type === 'success' ? '#10b981' : '#f59e0b'};
+            `;
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 5000);
+        }
+
+        // Initialize socket on load
+        initSocket();
     </script>
 </body>
 
