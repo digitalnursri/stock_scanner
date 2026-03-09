@@ -169,6 +169,101 @@
             font-weight: 500;
             transition: opacity 0.2s;
         }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: var(--card-bg);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            padding: 2rem;
+            position: relative;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: modalFadeIn 0.3s ease-out;
+        }
+
+        @keyframes modalFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1.5rem;
+            color: var(--text-dim);
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .close-btn:hover {
+            color: var(--text);
+        }
+
+        .detail-section {
+            margin-top: 1.5rem;
+            background: rgba(30, 41, 59, 0.5);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+
+        .detail-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .pass-icon {
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .fail-icon {
+            color: var(--danger);
+            font-weight: bold;
+        }
+
+        .clickable-ticker {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            color: #818cf8;
+            transition: color 0.2s;
+        }
+
+        .clickable-ticker:hover {
+            color: #6366f1;
+        }
     </style>
 </head>
 
@@ -217,6 +312,18 @@
         </div>
     </div>
 
+    <!-- Strategy Details Modal -->
+    <div id="detailsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="closeModal()">&times;</span>
+            <h2 id="modalTicker" style="margin-bottom: 0.5rem; color: #818cf8;">Ticker</h2>
+            <p id="modalScore" style="color: var(--text-dim); margin-bottom: 1.5rem;">Score: 0/7</p>
+            <div id="modalDetails">
+                <!-- Dynamic content will be injected here -->
+            </div>
+        </div>
+    </div>
+
     <div id="loading" class="loading-overlay">
         <div style="text-align: center;">
             <div class="spinner"></div>
@@ -225,6 +332,83 @@
     </div>
 
     <script>
+        let allStocksData = []; // Store globally for modal access
+
+        function formatCheck(passed) {
+            return passed ? '<span class="pass-icon">✓ PASS</span>' : '<span class="fail-icon">✗ FAIL</span>';
+        }
+
+        function showDetails(ticker) {
+            const stock = allStocksData.find(s => s.ticker === ticker);
+            if (!stock || !stock.details) return;
+
+            document.getElementById('modalTicker').textContent = stock.ticker + ' Strategy Details';
+            document.getElementById('modalScore').textContent = `Total VCP Score: ${stock.score}/${stock.max_score} | Current Price: ₹${stock.price}`;
+
+            const d = stock.details;
+            let html = '';
+
+            // Trend Section
+            if (d.trend) {
+                html += `
+                <div class="detail-section">
+                    <h3 style="margin-bottom: 0.8rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;">1. Market Trend</h3>
+                    <div class="detail-row"><span>Status</span> <span>${formatCheck(d.trend.pass)}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Condition</span> <span>Price > 50 DMA</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Current Price</span> <span>₹${d.trend.current_price}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">50 DMA</span> <span>₹${d.trend.sma50}</span></div>
+                </div>`;
+            }
+
+            // Resistance Section
+            if (d.resistance) {
+                html += `
+                <div class="detail-section">
+                    <h3 style="margin-bottom: 0.8rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;">2. Base & Resistance</h3>
+                    <div class="detail-row"><span>Proximity Check Status (< 15% away)</span> <span>${formatCheck(d.resistance.pass)}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Resistance Level</span> <span>₹${d.resistance.level}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Distance from Resistance</span> <span>${Math.abs(d.resistance.pct_below)}%</span></div>
+                </div>`;
+            }
+
+            // VCP Contraction Section
+            if (d.vcp) {
+                html += `
+                <div class="detail-section">
+                    <h3 style="margin-bottom: 0.8rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;">3. Volatility Contraction (VCP)</h3>
+                    <div class="detail-row"><span>Contraction Status</span> <span>${formatCheck(d.vcp.pass)}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Tightness Score</span> <span>${d.vcp.tightness} / 2 points</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Vol Contraction Stages (%)</span> <span>${d.vcp.vol_stages ? d.vcp.vol_stages.join(' → ') : 'N/A'}</span></div>
+                </div>`;
+            }
+
+            // Volume Contraction Section
+            if (d.volume) {
+                html += `
+                <div class="detail-section">
+                    <h3 style="margin-bottom: 0.8rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;">4. Volume Dry-up</h3>
+                    <div class="detail-row"><span>Volume Status</span> <span>${formatCheck(d.volume.pass)}</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">Condition</span> <span>20d Avg Vol < 50d Avg Vol</span></div>
+                    <div class="detail-row"><span style="color: var(--text-dim);">20d / 50d Ratio</span> <span>${d.volume.ratio}x</span></div>
+                </div>`;
+            }
+
+            document.getElementById('modalDetails').innerHTML = html;
+            document.getElementById('detailsModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('detailsModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function (event) {
+            const modal = document.getElementById('detailsModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+
         async function fetchResults() {
             const loading = document.getElementById('loading');
             try {
@@ -238,6 +422,7 @@
                 }
 
                 loading.style.display = 'none';
+                allStocksData = data.stocks; // Store globally
 
                 // Update Trend Info
                 const trendEl = document.getElementById('nifty-trend');
@@ -259,7 +444,7 @@
                     const row = document.createElement('tr');
                     const tagClass = s.tag.includes('Breakout') ? 'tag-breakout' : 'tag-high';
                     row.innerHTML = `
-                        <td class="ticker">${s.ticker}</td>
+                        <td class="ticker clickable-ticker" onclick="showDetails('${s.ticker}')" title="Click to view strategy details">${s.ticker}</td>
                         <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
                         <td>₹${s.price}</td>
                         <td style="color: var(--warning)">
