@@ -1,3 +1,7 @@
+# Eventlet monkey-patching MUST be first before any other imports
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 from data_fetcher import get_nifty250_tickers, get_realtime_data
@@ -6,7 +10,7 @@ import time
 import threading
 
 # App version - increment on each deployment for cache busting
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
