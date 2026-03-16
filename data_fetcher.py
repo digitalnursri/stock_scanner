@@ -43,87 +43,195 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def get_market_cap(ticker):
-    """Fetches market cap for a single ticker."""
+def get_live_stats(ticker):
+    """Fetches real-time price and market cap for a single ticker using fast_info."""
     try:
         t = yf.Ticker(ticker)
-        return t.fast_info['marketCap']
+        info = t.fast_info
+        return {
+            'price': info['lastPrice'],
+            'marketCap': info['marketCap']
+        }
     except:
-        return 0
+        return {'price': 0, 'marketCap': 0}
 
-def get_realtime_data(tickers):
-    """Fetches real-time data and technicals (RSI, DMA) for the given tickers."""
+def get_realtime_data(tickers, progress_callback=None, on_batch_complete=None, fetch_technicals=True):
+    """
+    Fetches real-time data for tickers.
+    If fetch_technicals is True, downloads 1y data for RSI/DMAs.
+    If False, performs a high-speed pass for Prices and Market Cap only via fast_info.
+    """
     if not tickers: return pd.DataFrame()
 
-    print(f"Fetching price data for {len(tickers)} stocks...")
-    try:
-        data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
-    except Exception as e:
-        print(f"Error fetching batch data: {e}")
-        return pd.DataFrame()
+    total_tickers = len(tickers)
 
-    print(f"Fetching Market Caps...")
-    market_caps = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-        future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
-        for future in concurrent.futures.as_completed(future_to_ticker):
-            ticker = future_to_ticker[future]
-            try: market_caps[ticker] = future.result()
-            except: market_caps[ticker] = 0
-
-    stock_list = []
-    for ticker in tickers:
+    if not fetch_technicals:
+        print(f"  [FAST-MODE] Starting bulk price download for {total_tickers} tickers...")
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data.columns.levels[0]:
-                    df = data[ticker].copy().dropna()
-                else: continue
+            # Single bulk download for all tickers is MUCH faster than individual fast_info calls
+            # period="1d", interval="1m" gives us the current day's data
+            data = yf.download(tickers, period="1d", interval="1m", progress=False, group_by='ticker', timeout=30)
+            print(f"  [FAST-MODE] Bulk download complete.")
+            
+            all_stocks = []
+            for ticker in tickers:
+                try:
+                    # Get last price from dataframe
+                    if isinstance(data.columns, pd.MultiIndex):
+                        if ticker in data.columns.levels[0]:
+                            stock_df = data[ticker].dropna()
+                            if stock_df.empty: continue
+                            price = round(stock_df['Close'].iloc[-1], 2)
+                        else: continue
+                    else:
+                        price = round(data['Close'].iloc[-1], 2)
+
+                    stock_data = {
+                        'Ticker': ticker.replace('.NS', ''),
+                        'Price': price,
+                        'Market Cap': "N/A", # fast_info is better for MC, but let's prioritize Price for speed
+                        'FetchMode': 'Price'
+                    }
+                    all_stocks.append(stock_data)
+                except: continue
+            
+            if on_batch_complete and all_stocks:
+                on_batch_complete(all_stocks)
+            return pd.DataFrame(all_stocks)
+        except Exception as e:
+            print(f"Error in fast bulk download: {e}")
+            return pd.DataFrame()
+
+    # Original Technicals logic (Chunked 1y download)
+    print(f"Fetching full technical data for {total_tickers} stocks in chunks...")
+    all_stocks = []
+    chunk_size = 25
+    
+    for i in range(0, total_tickers, chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        current_batch = i // chunk_size + 1
+        total_batches = (total_tickers + chunk_size - 1) // chunk_size
+        
+        print(f"  Downloading chunk {current_batch}/{total_batches}...")
+        
+        # Report progress if callback is provided
+        if progress_callback:
+            try:
+                progress_callback(current_batch, total_batches)
+            except:
+                pass
+
+        batch_stocks = []
+        data = None
+        try:
+            if fetch_technicals:
+                print(f"  [DEBUG] Calling yf.download for {len(chunk)} tickers...")
+                # Use a slightly longer timeout for the download itself
+                data = yf.download(chunk, period="1y", group_by='ticker', progress=False, timeout=60)
+                print(f"  [DEBUG] yf.download returned for batch {current_batch}")
             else:
-                df = data.copy().dropna()
+                print(f"  [DEBUG] Skipping yf.download (Prices-Only mode) for batch {current_batch}")
             
-            if len(df) < 50: continue
-                
-            price_series = df['Adj Close'] if 'Adj Close' in df else df['Close']
-            df['DMA50'] = price_series.rolling(window=50).mean()
-            df['DMA100'] = price_series.rolling(window=100).mean()
-            df['DMA200'] = price_series.rolling(window=200).mean()
-            df['RSI'] = calculate_rsi(df['Close'])
-
-            last_row = df.iloc[-1]
-            price = round(last_row['Close'], 2)
-            rsi_val = round(last_row['RSI'], 2) if pd.notna(last_row['RSI']) else None
-            dma50_val = round(last_row['DMA50'], 2) if pd.notna(last_row['DMA50']) else None
-            dma200_val = round(last_row['DMA200'], 2) if pd.notna(last_row['DMA200']) else None
+            # Fetch Live Stats (Price & Market Cap) for this chunk
+            live_stats = {}
+            print(f"  [DEBUG] Fetching live stats for batch {current_batch} via GreenPool...")
             
-            score = 0
-            if dma50_val and dma200_val:
-                if price > dma50_val: score += 1
-                if dma50_val > dma200_val: score += 2
+            import eventlet
+            pool = eventlet.GreenPool(10) # 10 workers
             
-            if rsi_val:
-                if rsi_val < 30: score += 3
-                elif rsi_val > 70: score -= 3
+            def fetch_single_stat(t):
+                try:
+                    with eventlet.Timeout(10): # 10s timeout per ticker
+                        stats = get_live_stats(t)
+                        return t, stats
+                except:
+                    return t, {'price': 0, 'marketCap': 0}
 
-            signal = "Bullish" if score >= 3 else "Bearish" if score <= -3 else "Neutral"
-            suggestion = "Strong Buy" if score >= 5 else "Buy" if score >= 3 else "Hold" if score >= -2 else "Sell"
+            for ticker, stats in pool.imap(fetch_single_stat, chunk):
+                live_stats[ticker] = stats
+                print(f"    [DEBUG] Stats for {ticker}: Price={stats['price']}, MC={stats['marketCap']}")
 
-            mc = market_caps.get(ticker, 0)
-            mc_formatted = f"{mc / 1e7:.2f} Cr" if mc else "N/A"
+            print(f"  [DEBUG] Processing {len(chunk)} tickers in batch {current_batch}...")
+            for ticker in chunk:
+                print(f"    [DEBUG] Processing {ticker} stats...")
+                try:
+                    stats = live_stats.get(ticker, {})
+                    price = round(stats.get('price', 0), 2)
+                    
+                    rsi_val = None
+                    dma50_val = None
+                    dma100_val = None
+                    dma200_val = None
+                    score = 0
+                    
+                    if fetch_technicals and data is not None:
+                        if isinstance(data.columns, pd.MultiIndex):
+                            if ticker in data.columns.levels[0]:
+                                df = data[ticker].copy().dropna(how='all')
+                            else: continue
+                        else:
+                            df = data.copy().dropna(how='all')
+                        
+                        if len(df) >= 50:
+                            price_series = df['Adj Close'] if 'Adj Close' in df else df['Close']
+                            df['DMA50'] = price_series.rolling(window=50).mean()
+                            df['DMA100'] = price_series.rolling(window=100).mean()
+                            df['DMA200'] = price_series.rolling(window=200).mean()
+                            df['RSI'] = calculate_rsi(df['Close'])
 
-            stock_list.append({
-                'Ticker': ticker.replace('.NS', ''),
-                'Price': price,
-                'Market Cap': mc_formatted,
-                'RSI': rsi_val if rsi_val else 'N/A',
-                'DMA 50': dma50_val if dma50_val else 'N/A',
-                'DMA 200': dma200_val if dma200_val else 'N/A',
-                'Signal': signal,
-                'Suggestion': suggestion,
-                'Score': score,
-            })
-        except: continue
+                            last_row = df.iloc[-1]
+                            if price == 0: price = round(last_row['Close'], 2)
+                            
+                            rsi_val = round(last_row['RSI'], 2) if pd.notna(last_row['RSI']) else None
+                            dma50_val = round(last_row['DMA50'], 2) if pd.notna(last_row['DMA50']) else None
+                            dma100_val = round(last_row['DMA100'], 2) if pd.notna(last_row['DMA100']) else None
+                            dma200_val = round(last_row['DMA200'], 2) if pd.notna(last_row['DMA200']) else None
+                            
+                            if dma50_val and dma200_val:
+                                if price > dma50_val: score += 1
+                                if dma50_val > dma200_val: score += 2
+                            
+                            if rsi_val:
+                                if rsi_val < 30: score += 3
+                                elif rsi_val > 70: score -= 3
+
+                    signal = "Bullish" if score >= 3 else "Bearish" if score <= -3 else "Neutral"
+                    suggestion = "Strong Buy" if score >= 5 else "Buy" if score >= 3 else "Hold" if score >= -2 else "Sell"
+
+                    mc = stats.get('marketCap', 0)
+                    mc_formatted = f"{mc / 1e7:.2f} Cr" if mc else "N/A"
+
+                    stock_data = {
+                        'Ticker': ticker.replace('.NS', ''),
+                        'Price': price,
+                        'Market Cap': mc_formatted,
+                        'RSI': rsi_val if rsi_val is not None else 'N/A',
+                        'DMA 50': dma50_val if dma50_val is not None else 'N/A',
+                        'DMA 100': dma100_val if dma100_val is not None else 'N/A',
+                        'DMA 200': dma200_val if dma200_val is not None else 'N/A',
+                        'Signal': signal if fetch_technicals else 'KEEP',
+                        'Suggestion': suggestion if fetch_technicals else 'KEEP',
+                        'Score': score if fetch_technicals else 'KEEP',
+                        'FetchMode': 'Full' if fetch_technicals else 'Price'
+                    }
+                    print(f"      [DEBUG] {ticker}: Price={price}, RSI={rsi_val}, Score={score}")
+                    all_stocks.append(stock_data)
+                    batch_stocks.append(stock_data)
+                except Exception as e:
+                    continue
             
-    return pd.DataFrame(stock_list)
+            # Call batch complete callback if provided
+            if on_batch_complete and batch_stocks:
+                try:
+                    on_batch_complete(batch_stocks)
+                except:
+                    pass
+
+        except Exception as e:
+            print(f"Error fetching batch data: {e}")
+            continue
+
+    return pd.DataFrame(all_stocks)
 
 def get_sector_rankings():
     """Ranks sectors based on 1m and 3m performance."""

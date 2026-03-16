@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 
 <body>
@@ -759,6 +760,49 @@
         </script>
         {% endif %}
     </div>
+
+    <!-- Socket.IO for live price updates -->
+    <script>
+        (function () {
+            const socket = io({
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 10000
+            });
+
+            socket.on('connect', function () {
+                console.log('Detail page: Connected to real-time updates');
+            });
+
+            socket.on('market_data_update', function (data) {
+                if (!data.stocks) return;
+                const ticker = "{{ ticker }}";
+                const stockData = data.stocks.find(s => s.Ticker === ticker);
+                if (stockData && stockData.Price) {
+                    const priceEl = document.querySelector('.current-price');
+                    if (priceEl) {
+                        const oldPrice = parseFloat(priceEl.textContent.replace('₹', '').replace(/,/g, ''));
+                        const newPrice = stockData.Price;
+                        priceEl.textContent = '₹' + newPrice.toLocaleString('en-IN');
+
+                        // Flash green/red on price change
+                        if (newPrice !== oldPrice) {
+                            priceEl.style.transition = 'color 0.3s';
+                            priceEl.style.color = newPrice > oldPrice ? '#10b981' : '#ef4444';
+                            setTimeout(() => { priceEl.style.color = ''; }, 1500);
+                        }
+                    }
+                }
+            });
+
+            socket.on('reconnect', function (attemptNumber) {
+                console.log('Detail page: Reconnected after ' + attemptNumber + ' attempts');
+            });
+        })();
+    </script>
 </body>
 
 </html>

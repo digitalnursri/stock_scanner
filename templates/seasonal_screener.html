@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         .screener-header {
             display: flex;
@@ -448,7 +448,7 @@
         </div>
 
         <!-- Results Table -->
-        <div class="screener-table-wrapper" id="resultsContainer" style="display: none;">
+        <div class="screener-table-wrapper" id="resultsContainer" style="display: none; position: relative;">
             <table class="screener-table">
                 <thead>
                     <tr>
@@ -468,28 +468,87 @@
             </table>
         </div>
 
+        <!-- Pagination -->
+        <div class="pagination-container" id="paginationNav" style="display: none;">
+            <div class="pagination-info">
+                Showing <span id="paginationStart">0</span> to <span id="paginationEnd">0</span> of <span
+                    id="paginationTotal">0</span> patterns
+            </div>
+            <div class="pagination-controls">
+                <button class="btn btn-secondary btn-sm" id="prevPage" onclick="changePage(currentPage - 1)">
+                    &laquo; Previous
+                </button>
+                <div class="page-numbers">
+                    <span class="page-current">Page <span id="currentPageDisplay">1</span> of <span
+                            id="totalPagesDisplay">1</span></span>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="nextPage" onclick="changePage(currentPage + 1)">
+                    Next &raquo;
+                </button>
+            </div>
+        </div>
+
+        <style>
+            .pagination-container {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 1rem;
+                margin: 1.5rem 0;
+                padding: 1rem;
+                background: var(--card);
+                border-radius: 12px;
+                border: 1px solid var(--border);
+            }
+
+            .pagination-controls {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            }
+
+            .btn-sm {
+                padding: 6px 12px;
+                font-size: 0.85rem;
+            }
+
+            .loading-table-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(15, 23, 46, 0.6);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 10;
+                backdrop-filter: blur(2px);
+            }
+        </style>
+
         <!-- Empty State -->
         <div class="empty-state" id="emptyState">
             <h3>🌸 Seasonal Pattern Screener</h3>
             <p>Find stocks with strong seasonal patterns. Click "Analyze Stocks" to begin.</p>
-            <p style="font-size: 0.85rem; margin-top: 12px;">
-                ⚠️ First analysis may take 2-3 minutes as we fetch data for 50 stocks.
-            </p>
         </div>
     </div>
 
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
-        <div class="loading-text">Analyzing seasonal patterns... This may take a few minutes.</div>
+        <div class="loading-text">Analyzing seasonal patterns...</div>
     </div>
 
     <script>
         let allResults = [];
         let sortColumn = 'total_rallies';
         let sortDirection = 'desc';
-
         let currentMode = 'gain';
+        let currentPage = 1;
+        let totalPages = 1;
+        let pageSize = 20;
+        let consistencyActive = false;
 
         // Initialize Mode Toggle
         document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -498,7 +557,6 @@
                 btn.classList.add('active');
                 currentMode = btn.dataset.mode;
 
-                // Update Labels
                 const isGain = currentMode === 'gain';
                 document.getElementById('minGainLabel').textContent = isGain ? 'Min Gain %' : 'Min Loss %';
                 document.getElementById('minRalliesLabel').textContent = isGain ? 'Min Rallies' : 'Min Dips';
@@ -509,259 +567,193 @@
                 document.getElementById('colAvgDrwdn').textContent = isGain ? 'Avg Drawdown %' : 'Avg Recovery %';
                 document.getElementById('colMinDrwdn').textContent = isGain ? 'Min Rally Loss %' : 'Max Rally Recovery %';
 
+                currentPage = 1;
                 loadScreenerData();
             });
         });
 
-        // Initialize Consistency Toggle
-        let consistencyActive = false;
+        // Consistency Toggle
         const consistencyToggle = document.getElementById('consistencyToggle');
         consistencyToggle.addEventListener('click', () => {
             consistencyActive = !consistencyActive;
             consistencyToggle.classList.toggle('active', consistencyActive);
-
-            // If active, force success rate filter to 100
             if (consistencyActive) {
                 document.getElementById('successRateFilter').value = '100';
             }
-
-            applyFiltersAndRender();
+            currentPage = 1;
+            loadScreenerData();
         });
 
-        async function loadScreenerData() {
+        // Initialize Socket
+        let socket;
+        function initSocket() {
+            socket = io({
+                transports: ['websocket'],
+                reconnection: true
+            });
+
+            socket.on('market_data_update', function (data) {
+                if (data.signal === 'refresh') {
+                    console.log('Seasonal data refresh signal received');
+                    loadScreenerData(true); // Silent refresh
+                }
+            });
+
+            socket.on('connect', () => console.log('Socket connected'));
+            socket.on('disconnect', () => console.log('Socket disconnected'));
+        }
+
+        async function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            await loadScreenerData();
+        }
+
+        async function loadScreenerData(isSilent = false) {
             const minGain = document.getElementById('minGainFilter').value;
+            const selectedMonthStr = document.getElementById('monthFilter').value;
+            const minRallies = parseInt(document.getElementById('minRalliesFilter').value) || 0;
+            let minSuccessRate = consistencyActive ? 100 : (parseInt(document.getElementById('successRateFilter').value) || 0);
+
             const btn = document.getElementById('analyzeBtn');
             const loading = document.getElementById('loadingOverlay');
+            const resultsContainer = document.getElementById('resultsContainer');
 
-            btn.disabled = true;
-            btn.textContent = '⏳ Analyzing...';
-            loading.classList.add('active');
+            if (!isSilent) {
+                btn.disabled = true;
+                btn.textContent = '⏳ Analyzing...';
+
+                if (currentPage === 1) loading.classList.add('active');
+                else showTableLoading(true);
+            }
 
             try {
-                const response = await fetch(`/api/seasonal-screener?min_gain=${minGain}&direction=${currentMode}`);
+                const url = `/api/seasonal-screener?min_gain=${minGain}&direction=${currentMode}&month=${selectedMonthStr}&min_rallies=${minRallies}&min_success_rate=${minSuccessRate}&page=${currentPage}&page_size=${pageSize}&sort_by=${sortColumn}&sort_direction=${sortDirection}`;
+                const response = await fetch(url);
                 const data = await response.json();
 
                 if (data.status === 'calculating') {
-                    document.getElementById('emptyState').innerHTML = `
-                        <h3>⚙️ Initial Analysis in Progress</h3>
-                        <p>${data.message}</p>
-                        <p style="font-size: 0.85rem; margin-top: 12px; color: var(--accent);">
-                            Please wait 1-2 minutes and refresh. We are currently processing the Nifty 250 stocks for you.
-                        </p>
-                    `;
+                    document.getElementById('emptyState').innerHTML = `<h3>⚙️ Initial Analysis in Progress</h3><p>${data.message}</p>`;
                     document.getElementById('emptyState').style.display = 'block';
-                    document.getElementById('resultsContainer').style.display = 'none';
+                    resultsContainer.style.display = 'none';
                     document.getElementById('statsContainer').style.display = 'none';
+                    document.getElementById('paginationNav').style.display = 'none';
                 } else if (data.stocks && data.stocks.length > 0) {
                     allResults = data.stocks;
-                    applyFiltersAndRender();
+                    totalPages = data.total_pages;
+                    currentPage = data.current_page;
+
+                    renderTable(data.stocks);
+                    updatePaginationUI(data);
 
                     document.getElementById('totalStocksValue').textContent = data.total_analyzed;
+                    document.getElementById('matchingStocksValue').textContent = data.total_count;
                     document.getElementById('statsContainer').style.display = 'flex';
-                    document.getElementById('resultsContainer').style.display = 'block';
+                    resultsContainer.style.display = 'block';
                     document.getElementById('emptyState').style.display = 'none';
 
-                    if (data.min_gain_requested) {
-                        const label = currentMode === 'gain' ? 'gained' : 'lost';
-                        document.getElementById('dynamicFilterHint').textContent =
-                            `Showing results where EVERY rally ${label} at least ${data.min_gain_requested}%`;
-                    }
-
-                    if (data.status === 'stale_updating') {
-                        // Optionally show a subtle "updating in background" toast
-                        console.log('Data is being refreshed in background...');
-                    }
+                    updateHeaderStats(data.stocks);
                 } else {
-                    document.getElementById('emptyState').innerHTML = `
-                        <h3>📊 No Data Available</h3>
-                        <p>No stocks currently match the seasonal patterns with ${minGain}% gain. Try lowering the Min Gain filter.</p>
-                    `;
+                    document.getElementById('emptyState').innerHTML = `<h3>📊 No Data Available</h3><p>Try lowering the Min Gain filter.</p>`;
                     document.getElementById('emptyState').style.display = 'block';
+                    resultsContainer.style.display = 'none';
+                    document.getElementById('paginationNav').style.display = 'none';
+                    document.getElementById('statsContainer').style.display = 'none';
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Failed to load data. Please try again.');
             } finally {
-                btn.disabled = false;
-                btn.textContent = '🔍 Analyze Stocks';
-                loading.classList.remove('active');
+                if (!isSilent) {
+                    btn.disabled = false;
+                    btn.textContent = '🔍 Analyze Stocks';
+                    loading.classList.remove('active');
+                    showTableLoading(false);
+                }
             }
         }
 
-        function getMonthStats(stock, monthName) {
-            // Look up a specific month's stats from the monthly_stats array
-            if (!stock.monthly_stats) return null;
-            return stock.monthly_stats.find(m => m.month === monthName) || null;
-        }
-
-        function applyFiltersAndRender() {
-            const minGain = parseFloat(document.getElementById('minGainFilter').value) || 20;
-            const selectedMonthStr = document.getElementById('monthFilter').value; // "January" to "December" or ""
-            const minRallies = parseInt(document.getElementById('minRalliesFilter').value) || 0;
-
-            // Override success rate if consistency mode is active
-            let minSuccessRate = consistencyActive ? 100 : (parseInt(document.getElementById('successRateFilter').value) || 0);
-
-            // Update UI hint if consistency is active
+        function updateHeaderStats(stocks) {
             const hintElement = document.getElementById('dynamicFilterHint');
             const label = currentMode === 'gain' ? 'gained' : 'lost';
             if (consistencyActive) {
+                const minGain = parseFloat(document.getElementById('minGainFilter').value) || 20;
                 hintElement.innerHTML = `<strong>100% Consistency:</strong> Showing only stocks that ${label} at least ${minGain}% <u>every single year</u>.`;
-                hintElement.style.color = '#10b981'; // Greenish
+                hintElement.style.color = '#10b981';
             } else {
-                hintElement.textContent = `Showing results where EVERY rally ${label} at least ${minGain}%`;
-                hintElement.style.color = 'var(--accent)';
+                hintElement.textContent = `Results for Min ${label.charAt(0).toUpperCase() + label.slice(1)} threshold.`;
+                hintElement.style.color = 'var(--text-muted)';
             }
+        }
 
-            const tableBody = document.getElementById('resultsBody'); // Changed from screenerTableBody
-            tableBody.innerHTML = '';
-
-            let matchCount = 0;
-
-            // Map "1" -> "January", etc. (This part is not needed if selectedMonthStr is already month name)
-            // const monthNames = ["January", "February", "March", "April", "May", "June", 
-            //                     "July", "August", "September", "October", "November", "December"];
-
-            let targetMonthName = null;
-            if (selectedMonthStr !== '') { // Changed from 'all' to '' for "All Months" option
-                targetMonthName = selectedMonthStr; // Use the month name directly
+        function showTableLoading(show) {
+            const container = document.getElementById('resultsContainer');
+            let overlay = container.querySelector('.loading-table-overlay');
+            if (show && !overlay) {
+                overlay = document.createElement('div');
+                overlay.className = 'loading-table-overlay';
+                overlay.innerHTML = '<div class="loading-spinner" style="width:30px;height:30px;border-width:3px;"></div>';
+                container.appendChild(overlay);
+            } else if (!show && overlay) {
+                overlay.remove();
             }
+        }
 
-            let displayData = []; // New array to hold filtered and processed data for sorting
+        function updatePaginationUI(data) {
+            const nav = document.getElementById('paginationNav');
+            nav.style.display = data.total_pages > 1 ? 'flex' : 'none';
+            document.getElementById('paginationStart').textContent = (data.current_page - 1) * pageSize + 1;
+            document.getElementById('paginationEnd').textContent = Math.min(data.current_page * pageSize, data.total_count);
+            document.getElementById('paginationTotal').textContent = data.total_count;
+            document.getElementById('currentPageDisplay').textContent = data.current_page;
+            document.getElementById('totalPagesDisplay').textContent = data.total_pages;
+            document.getElementById('prevPage').disabled = data.current_page === 1;
+            document.getElementById('nextPage').disabled = data.current_page === data.total_pages;
+        }
 
-            allResults.forEach(stock => { // Changed from allStocksData to allResults
-                // 1. Determine which stats to evaluate (Best Month vs Selected Month)
-                let displayStats = {};
-
-                if (selectedMonthStr === '') { // Changed from 'all' to ''
-                    // Use BEST MONTH stats
-                    // The backend already provides best_month, best_month_rallies, etc.
-                    displayStats = {
-                        month: stock.best_month,
-                        occurrences: stock.best_month_rallies,
-                        avg_gain: stock.best_month_avg_gain,
-                        min_gain: stock.best_month_min_gain, // Matches backend name
-                        // Drawdown/Recovery columns now prioritize Cross-Trend stats for better risk awareness
-                        avg_drawdown: stock.best_month_opp_avg || stock.best_month_drawdown,
-                        min_drawdown: stock.best_month_opp_max || stock.best_month_min_drawdown,
-                        success_rate: stock.best_month_success
-                    };
-                } else {
-                    // Use SELECTED MONTH stats
-                    // Find the specific month in monthly_stats
-                    const monthData = stock.monthly_stats.find(m => m.month === targetMonthName);
-
-                    if (monthData) {
-                        displayStats = {
-                            ...monthData,
-                            avg_drawdown: monthData.opp_avg_gain || monthData.avg_drawdown,
-                            min_drawdown: monthData.opp_max_gain || monthData.min_drawdown
-                        };
-                    } else {
-                        // Month exists in list? If not found, it implies 0 stats
-                        displayStats = {
-                            month: targetMonthName, occurrences: 0, avg_gain: 0, min_gain: 0, avg_drawdown: 0, min_drawdown: 0, success_rate: 0
-                        };
-                    }
-                }
-
-                // 2. Apply Filters
-                // Min Gain is already filtered by backend API params mostly, but we double check if needed? 
-                // Actually stock list from API is for a specific min_gain. 
-                // But we can filter again if we want, though usually not needed.
-
-                // Min Rallies (Occurrences)
-                if (displayStats.occurrences < minRallies) return;
-
-                // Success Rate
-                if (displayStats.success_rate < minSuccessRate) return;
-
-                // If specific month selected, we only show if it actually has data? 
-                // Or do we show 0? Usually we want "matching" stocks, so 0 occurrences implies no match.
-                if (selectedMonthStr !== '' && displayStats.occurrences === 0) return; // Changed from 'all' to ''
-
-                // Add to displayData for sorting
-                displayData.push({
-                    ticker: stock.ticker,
-                    total_rallies: stock.total_rallies, // Assuming total_rallies is still relevant for sorting
-                    display_month: displayStats.month,
-                    display_rallies: displayStats.occurrences,
-                    display_avg_gain: displayStats.avg_gain,
-                    display_min_gain: displayStats.min_gain,
-                    display_drawdown: displayStats.avg_drawdown,
-                    display_min_drawdown: displayStats.min_drawdown,
-                    display_success: displayStats.success_rate,
-                    // Fields for sorting
-                    month_rallies: displayStats.occurrences,
-                    avg_gain: displayStats.avg_gain,
-                    min_rally_gain: displayStats.min_gain,
-                    avg_drawdown: displayStats.avg_drawdown,
-                    min_drawdown: displayStats.min_drawdown,
-                    success_rate: displayStats.success_rate
-                });
-            });
-
-            // Sort
-            const sortMap = {
-                'ticker': 'ticker',
-                'total_rallies': 'total_rallies',
-                'best_month': 'display_month',
-                'best_month_rallies': 'month_rallies',
-                'best_month_avg_gain': 'avg_gain',
-                'min_rally_gain': 'min_rally_gain',
-                'best_month_drawdown': 'avg_drawdown',
-                'best_month_min_drawdown': 'min_drawdown',
-                'best_month_success': 'success_rate'
-            };
-            const actualSortCol = sortMap[sortColumn] || sortColumn;
-
-            displayData.sort((a, b) => {
-                let aVal = a[actualSortCol];
-                let bVal = b[actualSortCol];
-                if (aVal === undefined) aVal = 0;
-                if (bVal === undefined) bVal = 0;
-
-                if (typeof aVal === 'string') {
-                    return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-                }
-                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-            });
-
-            // Update stats
-            document.getElementById('matchingStocksValue').textContent = displayData.length;
-
-            // Find most common month in filtered results
-            const monthCounts = {};
-            displayData.forEach(s => {
-                monthCounts[s.display_month] = (monthCounts[s.display_month] || 0) + 1;
-            });
-            const topMonth = Object.entries(monthCounts).sort((a, b) => b[1] - a[1])[0];
-            document.getElementById('topMonthValue').textContent = topMonth ? topMonth[0] : '-';
-
-            // Render table
+        function renderTable(stocks) {
             const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = '';
-
-            displayData.forEach(item => {
-                const row = document.createElement('tr');
+            
+            // Preserve scroll
+            const scrollPos = window.scrollY;
+            
+            let newHtml = '';
+            stocks.forEach(stock => {
                 const valClass = currentMode === 'gain' ? 'positive' : 'negative';
-                const drwdnClass = currentMode === 'gain' ? 'negative' : 'positive';
                 const sign = currentMode === 'gain' ? '+' : '-';
-                const drwdnSign = currentMode === 'gain' ? '-' : '+';
+                
+                // Determine price color/animation based on prev_price from the backend
+                let priceClass = '';
+                if (stock.prev_price && stock.price > stock.prev_price) {
+                    priceClass = 'flash-up-text';
+                } else if (stock.prev_price && stock.price < stock.prev_price) {
+                    priceClass = 'flash-down-text';
+                }
 
-                row.innerHTML = `
-                    <td><a href="/stock/${item.ticker}" class="ticker-link">${item.ticker}</a></td>
-                    <td>${item.total_rallies}</td>
-                    <td><span class="month-badge">${item.display_month}</span></td>
-                    <td>${item.display_rallies}</td>
-                    <td class="${valClass}">${sign}${item.display_avg_gain}%</td>
-                    <td class="${valClass}">${sign}${item.display_min_gain}%</td>
-                    <td class="${drwdnClass}">${drwdnSign}${Math.abs(item.display_drawdown)}%</td>
-                    <td class="${drwdnClass}">${drwdnSign}${Math.abs(item.display_min_drawdown)}%</td>
-                    <td>${item.display_success}%</td>
+                newHtml += `
+                    <tr>
+                        <td class="ticker"><a href="/stock/${stock.ticker}" class="ticker-link ${priceClass}">${stock.ticker} (₹${stock.price || '--'})</a></td>
+                        <td>${stock.total_rallies}</td>
+                        <td><span class="month-badge">${stock.best_month}</span></td>
+                        <td>${stock.best_month_rallies} / 10</td>
+                        <td class="${valClass}">${sign}${stock.best_month_avg_gain.toFixed(1)}%</td>
+                        <td>${stock.min_rally_gain.toFixed(1)}%</td>
+                        <td class="negative">-${stock.best_month_drawdown.toFixed(1)}%</td>
+                        <td class="negative">-${stock.best_month_min_drawdown.toFixed(1)}%</td>
+                        <td><strong>${stock.best_month_success}%</strong></td>
+                    </tr>
                 `;
-                tbody.appendChild(row);
             });
+            
+            tbody.innerHTML = newHtml;
+
+            // Clean up flashing classes after animation completes
+            setTimeout(() => {
+                document.querySelectorAll('.flash-up-text, .flash-down-text').forEach(el => {
+                    el.classList.remove('flash-up-text', 'flash-down-text');
+                });
+            }, 1000);
+
+            window.scrollTo(0, scrollPos); // Restore scroll
         }
 
         function sortByColumn(column) {
@@ -771,80 +763,10 @@
                 sortColumn = column;
                 sortDirection = 'desc';
             }
-
-            // Update header styles
-            document.querySelectorAll('.screener-table th').forEach(th => {
-                th.classList.remove('sorted-asc', 'sorted-desc');
-            });
-
-            applyFiltersAndRender();
+            loadScreenerData();
         }
 
-        // Re-filter when filter values change (only if data is loaded)
-        document.getElementById('monthFilter').addEventListener('change', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
-        });
-        document.getElementById('minRalliesFilter').addEventListener('change', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
-        });
-        document.getElementById('minRalliesFilter').addEventListener('input', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
-        });
-        document.getElementById('successRateFilter').addEventListener('change', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
-        });
-
-        // Socket.IO for real-time updates
-        let socket;
-        let isConnected = false;
-
-        function initSocket() {
-            socket = io();
-            
-            socket.on('connect', function() {
-                console.log('Connected to real-time updates');
-                isConnected = true;
-                showNotification('Connected to live updates', 'success');
-            });
-            
-            socket.on('disconnect', function() {
-                console.log('Disconnected from real-time updates');
-                isConnected = false;
-                showNotification('Disconnected from live updates', 'warning');
-            });
-            
-            socket.on('seasonal_cache_updated', function(data) {
-                console.log('Seasonal cache updated:', data);
-                showNotification(`Seasonal data refreshed! ${data.total_stocks} stocks analyzed.`, 'success');
-                // Reload data if user is viewing
-                if (allResults.length > 0) {
-                    loadScreenerData();
-                }
-            });
-        }
-
-        function showNotification(message, type) {
-            // Simple notification - you can enhance this
-            const notif = document.createElement('div');
-            notif.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 12px 20px;
-                border-radius: 8px;
-                color: white;
-                font-weight: 500;
-                z-index: 9999;
-                animation: slideIn 0.3s ease;
-                background: ${type === 'success' ? '#22c55e' : '#f59e0b'};
-            `;
-            notif.textContent = message;
-            document.body.appendChild(notif);
-            setTimeout(() => notif.remove(), 5000);
-        }
-
-        // Initialize socket on load
-        initSocket();
+        window.onload = () => initSocket();
     </script>
 </body>
 

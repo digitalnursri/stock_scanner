@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         .live-indicator {
             display: inline-flex;
@@ -22,10 +22,12 @@
             color: #22c55e;
             margin-left: 10px;
         }
+
         .live-indicator.offline {
             background: rgba(239, 68, 68, 0.1);
             color: #ef4444;
         }
+
         .live-dot {
             width: 8px;
             height: 8px;
@@ -33,14 +35,121 @@
             background: currentColor;
             animation: pulse 2s infinite;
         }
+
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
+
         .last-updated {
             font-size: 0.75rem;
             color: var(--text-muted);
             margin-left: 10px;
+        }
+
+        .flash-up {
+            animation: flashGreen 2s ease-out;
+        }
+
+        .flash-down {
+            animation: flashRed 2s ease-out;
+        }
+
+        @keyframes flashGreen {
+            0% {
+                background-color: rgba(34, 197, 94, 0.4);
+            }
+
+            100% {
+                background-color: transparent;
+            }
+        }
+
+        @keyframes flashRed {
+            0% {
+                background-color: rgba(239, 68, 68, 0.4);
+            }
+
+            100% {
+                background-color: transparent;
+            }
+        }
+
+        /* Pagination & Loading Styles */
+        .pagination-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .page-current {
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            border-radius: 12px;
+            backdrop-filter: blur(2px);
+        }
+
+        .table-wrapper {
+            position: relative;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(99, 102, 241, 0.2);
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem;
+            color: var(--text-dim);
         }
     </style>
 </head>
@@ -142,102 +251,135 @@
             </div>
         </div>
 
-        {% if stocks %}
-        <!-- Table -->
-        <div class="table-wrapper">
-            <table id="stockTable">
-                <thead>
-                    <tr>
-                        <th>Ticker</th>
-                        <th>Price</th>
-                        <th>Mkt Cap</th>
-                        <th>RSI</th>
-                        <th>DMA 50</th>
-                        <th>DMA 100</th>
-                        <th>DMA 200</th>
-                        <th>Signal</th>
-                        <th>Action</th>
-                        <th>Score</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for stock in stocks %}
-                    <tr data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
-                        data-dma200="{{ stock['DMA 200'] }}" data-mcap="{{ stock['Market Cap'] }}"
-                        data-signal="{{ stock.Signal }}" data-suggestion="{{ stock.Suggestion }}"
-                        data-score="{{ stock.Score }}">
-                        <td class="ticker"><a href="/stock/{{ stock.Ticker }}">{{ stock.Ticker }}</a></td>
-                        <td class="price">₹{{ stock.Price }}</td>
-                        <td class="mcap">{{ stock['Market Cap'] }}</td>
-                        <td
-                            class="rsi {{ 'rsi-low' if stock.RSI is number and stock.RSI < 30 else 'rsi-high' if stock.RSI is number and stock.RSI > 70 else '' }}">
-                            {{ stock.RSI }}</td>
-                        <td>{{ stock['DMA 50'] }}</td>
-                        <td>{{ stock['DMA 100'] }}</td>
-                        <td>{{ stock['DMA 200'] }}</td>
-                        <td><span class="signal-badge {{ stock.Signal|lower }}">{{ stock.Signal }}</span></td>
-                        <td><span class="action-badge {{ stock.Suggestion|lower|replace(' ', '-') }}">{{
-                                stock.Suggestion }}</span></td>
-                        <td
-                            class="score {{ 'positive' if stock.Score > 0 else 'negative' if stock.Score < 0 else '' }}">
-                            {{ stock.Score }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="empty-state" id="loadingState">
-            <div class="loading-spinner"></div>
-            <p>Loading market data... Please wait</p>
-            <p style="font-size: 0.8rem; color: var(--text-muted);">Data will appear automatically via WebSocket</p>
-        </div>
-        <style>
-            .loading-spinner {
-                width: 40px;
-                height: 40px;
-                border: 4px solid rgba(99, 102, 241, 0.2);
-                border-top-color: #6366f1;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
-                margin: 0 auto 1rem;
-            }
-            @keyframes spin {
-                to { transform: rotate(360deg); }
-            }
-            .empty-state {
-                text-align: center;
-                padding: 3rem;
-                color: var(--text-muted);
-            }
-        </style>
-        {% endif %}
-
-        <!-- Footer Legend -->
-        <div class="footer-info">
-            <h4>📊 How Scores Work</h4>
-            <div class="info-grid">
-                <div class="info-item">
-                    <strong>Trend Analysis</strong>
-                    <p>Price above all DMAs = Strong Uptrend (+3)</p>
-                </div>
-                <div class="info-item">
-                    <strong>Golden/Death Cross</strong>
-                    <p>DMA50 > DMA200 = Bullish (+2)</p>
-                </div>
-                <div class="info-item">
-                    <strong>RSI Momentum</strong>
-                    <p>RSI < 30=Oversold (+3), RSI> 70 = Overbought (-3)</p>
-                </div>
-                <div class="info-item">
-                    <strong>Action Guide</strong>
-                    <p>Score ≥5: Strong Buy | ≥3: Buy | -2 to 2: Hold | ≤-3: Sell</p>
-                </div>
-            </div>
+        <div id="mainContent">
+            {% include 'partials/stock_table.html' %}
         </div>
     </div>
 
+    <!-- Footer Legend -->
+    <div class="footer-info">
+        <h4>📊 How Scores Work</h4>
+        <div class="info-grid">
+            <div class="info-item">
+                <strong>Trend Analysis</strong>
+                <p>Price above all DMAs = Strong Uptrend (+3)</p>
+            </div>
+            <div class="info-item">
+                <strong>Golden/Death Cross</strong>
+                <p>DMA50 > DMA200 = Bullish (+2)</p>
+            </div>
+            <div class="info-item">
+                <strong>RSI Momentum</strong>
+                <p>RSI < 30=Oversold (+3), RSI> 70 = Overbought (-3)</p>
+            </div>
+            <div class="info-item">
+                <strong>Action Guide</strong>
+                <p>Score ≥5: Strong Buy | ≥3: Buy | -2 to 2: Hold | ≤-3: Sell</p>
+            </div>
+        </div>
+    </div>
+    </div>
+
     <script>
+        // Pagination state
+        var currentPage = parseInt('{{ current_page|default(1) }}');
+        var totalPages = parseInt('{{ total_pages|default(0) }}');
+        var pageSize = 20;
+
+        async function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+
+            currentPage = page;
+            showLoading(true);
+
+            try {
+                // We use use the standard index route but with AJAX to just refresh the table
+                const response = await fetch(`/?page=${page}&page_size=${pageSize}`, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+
+                // Since this is a simple app, we'll fetch from a new dedicated API endpoint we'll use for updates
+                // But for now, let's keep it simple and just reload for the first test IF needed,
+                // OR better: call the market data update logic
+                await refreshTableData();
+
+            } catch (err) {
+                console.error("Failed to change page:", err);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function refreshTableData(isSilent = false) {
+            if (!isSilent) showLoading(true);
+            try {
+                // Add cache-buster to URL
+                const url = `/?page=${currentPage}&page_size=${pageSize}&t=${new Date().getTime()}`;
+                const response = await fetch(url, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                const html = await response.text();
+                const oldContent = document.getElementById('mainContent');
+
+                if (oldContent) {
+                    oldContent.innerHTML = html;
+
+                    // The partial includes its own script to update lastUpdated
+                    // We also need to re-run animations or ensure they are visible.
+                    // The classes flash-up/flash-down are already in the HTML.
+
+                    // Optional: Remove flash classes after a few seconds so they can fire again next time
+                    setTimeout(() => {
+                        document.querySelectorAll('.flash-up, .flash-down').forEach(el => {
+                            el.classList.remove('flash-up', 'flash-down');
+                        });
+                    }, 4000);
+                }
+
+                // Update last updated time
+                const lastUpdatedEl = document.getElementById('lastUpdated');
+                if (lastUpdatedEl) {
+                    lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+                }
+
+                // Re-apply client-side filters and sorting if the table exists
+                if (document.getElementById('stockTable')) {
+                    applyFilters();
+                    sortTable();
+                }
+
+                if (isSilent) {
+                    const liveDot = document.querySelector('.live-dot');
+                    if (liveDot) {
+                        liveDot.style.boxShadow = '0 0 15px #10b981';
+                        setTimeout(() => liveDot.style.boxShadow = '', 1000);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to refresh table data:", err);
+            } finally {
+                if (!isSilent) showLoading(false);
+            }
+        }
+
+        function showLoading(isLoading) {
+            const wrapper = document.querySelector(".table-wrapper");
+            if (!wrapper) return;
+
+            let overlay = wrapper.querySelector(".loading-overlay");
+            if (isLoading && !overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "loading-overlay";
+                overlay.innerHTML = '<div class="loading-spinner"></div>';
+                wrapper.appendChild(overlay);
+            } else if (!isLoading && overlay) {
+                overlay.remove();
+            }
+        }
+
         function applyFilters() {
             const search = document.getElementById("searchInput").value.toUpperCase();
             const signalFilter = document.getElementById("signalFilter").value;
@@ -257,44 +399,37 @@
                 if (signalFilter !== "all" && signal !== signalFilter) show = false;
                 if (actionFilter !== "all" && action !== actionFilter) show = false;
                 if (rsiFilter === "oversold" && (isNaN(rsi) || rsi >= 30)) show = false;
-                if (rsiFilter === "overbought" && (isNaN(rsi) || rsi <= 70)) show = false;
-
-                row.style.display = show ? "" : "none";
+                if (rsiFilter === "overbought" && (isNaN(rsi) || rsi <= 70)) show = false; row.style.display = show ? "" : "none";
                 if (show) count++;
-            });
-
-            document.getElementById("stockCount").textContent = `${count} stocks`;
+            }); document.getElementById("stockCount").textContent = `${count} stocks (current page)`;
         }
-
         function sortTable() {
-            const sortBy = document.getElementById("sortBy").value;
-            const tbody = document.querySelector("#stockTable tbody");
-            const rows = Array.from(tbody.querySelectorAll("tr"));
+            const sortBy = document.getElementById("sortBy").value; const
+                tbody = document.querySelector("#stockTable tbody"); if (!tbody) return; const
+                    rows = Array.from(tbody.querySelectorAll("tr")); rows.sort((a, b) => {
+                        const [col, order] = sortBy.split("-");
+                        let valA, valB;
 
-            rows.sort((a, b) => {
-                const [col, order] = sortBy.split("-");
-                let valA, valB;
+                        if (col === "ticker") {
+                            valA = a.cells[0].textContent;
+                            valB = b.cells[0].textContent;
+                            return order === "asc" ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                        } else if (col === "price") {
+                            valA = parseFloat(a.dataset.price) || 0;
+                            valB = parseFloat(b.dataset.price) || 0;
+                        } else if (col === "rsi") {
+                            valA = parseFloat(a.dataset.rsi) || 50;
+                            valB = parseFloat(b.dataset.rsi) || 50;
+                        } else if (col === "mcap") {
+                            valA = parseFloat(a.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
+                            valB = parseFloat(b.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
+                        } else if (col === "score") {
+                            valA = parseInt(a.dataset.score) || 0;
+                            valB = parseInt(b.dataset.score) || 0;
+                        }
 
-                if (col === "ticker") {
-                    valA = a.cells[0].textContent;
-                    valB = b.cells[0].textContent;
-                    return order === "asc" ? valA.localeCompare(valB) : valB.localeCompare(valA);
-                } else if (col === "price") {
-                    valA = parseFloat(a.dataset.price) || 0;
-                    valB = parseFloat(b.dataset.price) || 0;
-                } else if (col === "rsi") {
-                    valA = parseFloat(a.dataset.rsi) || 50;
-                    valB = parseFloat(b.dataset.rsi) || 50;
-                } else if (col === "mcap") {
-                    valA = parseFloat(a.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
-                    valB = parseFloat(b.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
-                } else if (col === "score") {
-                    valA = parseInt(a.dataset.score) || 0;
-                    valB = parseInt(b.dataset.score) || 0;
-                }
-
-                return order === "asc" ? valA - valB : valB - valA;
-            });
+                        return order === "asc" ? valA - valB : valB - valA;
+                    });
 
             rows.forEach(row => tbody.appendChild(row));
             applyFilters();
@@ -314,29 +449,57 @@
         let socket;
 
         function initSocket() {
-            socket = io();
-            
-            socket.on('connect', function() {
+            socket = io({
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 10000
+            });
+
+            socket.on('connect', function () {
                 console.log('Connected to real-time updates');
                 updateLiveStatus(true);
             });
-            
-            socket.on('disconnect', function() {
+
+            socket.on('disconnect', function () {
                 console.log('Disconnected from real-time updates');
                 updateLiveStatus(false);
             });
-            
-            socket.on('market_data_update', function(data) {
-                console.log('Received real-time market data update');
-                updateTableWithNewData(data.stocks);
-                document.getElementById('lastUpdated').textContent = 'Updated: ' + new Date(data.updated_at).toLocaleTimeString();
+
+            socket.on('market_data_update', function (data) {
+                console.log('Received real-time market data signal');
+                if (data.signal === 'refresh') {
+                    console.log('Data refresh signal received. Refreshing table via AJAX (Silent).');
+                    refreshTableData(true); // Silent for background updates
+                }
+            });
+
+            socket.on('market_data_progress', function (data) {
+                console.log('Market data progress:', data.message);
+                const loadingText = document.querySelector('#loadingState p');
+                if (loadingText) {
+                    loadingText.innerHTML = `Loading market data... <br><small
+                style="color:var(--accent)">${data.message}</small>`;
+                }
+            });
+
+            socket.on('reconnect', function (attemptNumber) {
+                console.log('Reconnected after ' + attemptNumber + ' attempts');
+                updateLiveStatus(true);
+            });
+
+            socket.on('reconnect_attempt', function (attemptNumber) {
+                console.log('Reconnection attempt #' + attemptNumber);
             });
         }
 
         function updateLiveStatus(isConnected) {
             const statusEl = document.getElementById('liveStatus');
             const textEl = document.getElementById('liveText');
-            
+            if (!statusEl || !textEl) return;
+
             if (isConnected) {
                 statusEl.classList.remove('offline');
                 textEl.textContent = 'Live';
@@ -346,48 +509,26 @@
             }
         }
 
-        function updateTableWithNewData(stocks) {
-            const tbody = document.querySelector("#stockTable tbody");
-            tbody.innerHTML = '';
-            
-            stocks.forEach(stock => {
-                const row = document.createElement('tr');
-                row.setAttribute('data-price', stock.Price);
-                row.setAttribute('data-rsi', stock.RSI);
-                row.setAttribute('data-dma50', stock['DMA 50']);
-                row.setAttribute('data-dma200', stock['DMA 200']);
-                row.setAttribute('data-mcap', stock['Market Cap']);
-                row.setAttribute('data-signal', stock.Signal);
-                row.setAttribute('data-suggestion', stock.Suggestion);
-                row.setAttribute('data-score', stock.Score);
-                
-                const rsiClass = stock.RSI < 30 ? 'rsi-low' : stock.RSI > 70 ? 'rsi-high' : '';
-                const scoreClass = stock.Score > 0 ? 'positive' : stock.Score < 0 ? 'negative' : '';
-                
-                row.innerHTML = `
-                    <td class="ticker"><a href="/stock/${stock.Ticker}">${stock.Ticker}</a></td>
-                    <td class="price">₹${stock.Price}</td>
-                    <td class="mcap">${stock['Market Cap']}</td>
-                    <td class="rsi ${rsiClass}">${stock.RSI}</td>
-                    <td>${stock['DMA 50']}</td>
-                    <td>${stock['DMA 100']}</td>
-                    <td>${stock['DMA 200']}</td>
-                    <td><span class="signal-badge ${stock.Signal.toLowerCase()}">${stock.Signal}</span></td>
-                    <td><span class="action-badge ${stock.Suggestion.toLowerCase().replace(' ', '-')}">${stock.Suggestion}</span></td>
-                    <td class="score ${scoreClass}">${stock.Score}</td>
-                `;
-                tbody.appendChild(row);
-            });
-            
-            document.getElementById('stockCount').textContent = stocks.length + ' stocks';
-            applyFilters();
-            sortTable();
-        }
-
         // Initial sort by score and init socket
         window.onload = function () {
             sortTable();
             initSocket();
+
+            // If we are in loading state, immediately trigger one refresh
+            // and setup a polling check until data arrives
+            if (document.getElementById('loadingState')) {
+                console.log('Loading state detected on startup. Triggering initial refresh.');
+                refreshTableData();
+
+                const checkInterval = setInterval(() => {
+                    if (document.getElementById('loadingState')) {
+                        console.log('Still loading... checking for data update...');
+                        refreshTableData();
+                    } else {
+                        clearInterval(checkInterval);
+                    }
+                }, 10000); // Check every 10s if still loading
+            }
         };
     </script>
 </body>

@@ -1,0 +1,84 @@
+{% if stocks %}
+<!-- Table -->
+<div class="table-wrapper">
+    <table id="stockTable">
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Price</th>
+                <th>Mkt Cap</th>
+                <th>RSI</th>
+                <th>DMA 50</th>
+                <th>DMA 100</th>
+                <th>DMA 200</th>
+                <th>Signal</th>
+                <th>Action</th>
+                <th>Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for stock in stocks %}
+            {% set price_dir = '' %}
+            {% if stock.PrevPrice and stock.PrevPrice > 0 %}
+            {% if stock.Price > stock.PrevPrice %}
+            {% set price_dir = 'flash-up' %}
+            {% elif stock.Price < stock.PrevPrice %} {% set price_dir='flash-down' %} {% endif %} {% endif %} <tr
+                data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
+                data-dma200="{{ stock['DMA 200'] }}" data-mcap="{{ stock['Market Cap'] }}"
+                data-signal="{{ stock.Signal }}" data-suggestion="{{ stock.Suggestion }}"
+                data-score="{{ stock.Score }}">
+                <td class="ticker"><a href="/stock/{{ stock.Ticker }}">{{ stock.Ticker }}</a></td>
+                <td class="price {{ price_dir }}">₹{{ stock.Price }}</td>
+                <td class="mcap">{{ stock['Market Cap'] }}</td>
+                <td
+                    class="rsi {{ 'rsi-low' if stock.RSI is number and stock.RSI < 30 else 'rsi-high' if stock.RSI is number and stock.RSI > 70 else '' }}">
+                    {{ stock.RSI }}</td>
+                <td>{{ stock['DMA 50'] }}</td>
+                <td>{{ stock['DMA 100'] }}</td>
+                <td>{{ stock['DMA 200'] }}</td>
+                <td><span class="signal-badge {{ stock.Signal|lower }}">{{ stock.Signal }}</span></td>
+                <td><span class="action-badge {{ stock.Suggestion|lower|replace(' ', '-') }}">{{
+                        stock.Suggestion }}</span></td>
+                <td class="score {{ 'positive' if stock.Score > 0 else 'negative' if stock.Score < 0 else '' }}">
+                    {{ stock.Score }}</td>
+                </tr>
+                {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination -->
+<div class="pagination-container">
+    <div class="pagination-info">
+        Showing <span id="paginationStart">{{ ((current_page - 1) * 20) + 1 }}</span> to <span id="paginationEnd">{{
+            ((current_page - 1) * 20) + stocks|length }}</span>
+        of {{ total_count }} stocks
+    </div>
+    <div class="pagination-controls">
+        <button class="btn btn-secondary btn-sm" id="prevPage" onclick="changePage(currentPage - 1)" {% if
+            current_page==1 %}disabled{% endif %}>
+            &laquo; Previous
+        </button>
+        <div class="page-numbers" id="pageNumbers">
+            <span class="page-current">Page <span id="currentPageDisplay">{{ current_page }}</span> of <span
+                    id="totalPagesDisplay">{{ total_pages }}</span></span>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="nextPage" onclick="changePage(currentPage + 1)" {% if
+            current_page==total_pages %}disabled{% endif %}>
+            Next &raquo;
+        </button>
+    </div>
+</div>
+{% if last_updated %}
+<script>
+    if (document.getElementById('lastUpdated')) {
+        document.getElementById('lastUpdated').textContent = "Last synchronized: {{ last_updated|default('', true) }}";
+    }
+</script>
+{% endif %}
+{% else %}
+<div class="empty-state">
+    <div class="loading-spinner"></div>
+    <p>Loading market data...</p>
+</div>
+{% endif %}

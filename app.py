@@ -2,20 +2,41 @@
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
 from data_fetcher import get_nifty250_tickers, get_realtime_data
 import pandas as pd
 import time
-import threading
 
 # App version - increment on each deployment for cache busting
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.4.0"
 
 app = Flask(__name__)
+
+def paginate(items, page, page_size):
+    """Utility to paginate a list of items"""
+    total_count = len(items)
+    total_pages = (total_count + page_size - 1) // page_size
+    start = (page - 1) * page_size
+    end = start + page_size
+    return items[start:end], total_pages, total_count
+
+# File-based logging for debugging when terminal is not clear
+DEBUG_LOG_FILE = 'debug_log.txt'
+
+def log_debug(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted_msg = f"[{timestamp}] {message}\n"
+    print(formatted_msg, end='')
+    try:
+        with open(DEBUG_LOG_FILE, 'a') as f:
+            f.write(formatted_msg)
+            f.flush()
+    except:
+        pass
 app.config['SECRET_KEY'] = 'your-secret-key'
 app.config['TEMPLATES_AUTO_RELOAD'] = True  # Force template reload on every request
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', ping_timeout=20, ping_interval=10)
 
 # Inject version into all templates for cache busting
 @app.context_processor
@@ -46,11 +67,44 @@ from paper_trading import (
 CACHE = {
     "data": None,
     "last_updated": 0,
-    "lock": threading.Lock()
+    "lock": threading.RLock() # Use RLock to prevent deadlocks with nested calls
 }
 
-CACHE_DURATION = 300  # 5 minutes
-MARKET_DATA_CACHE_FILE = 'market_data_cache.json'  # Persist cache to file
+# Global state for cached items
+_cached_tickers = []
+_ticker_last_fetched = 0
+TICKER_CACHE_TTL = 3600  # 1 hour
+
+def get_cached_tickers():
+    """Returns tickers, fetching from nselib if cache expired"""
+    global _cached_tickers, _ticker_last_fetched
+    
+    now = time.time()
+    if not _cached_tickers or (now - _ticker_last_fetched > TICKER_CACHE_TTL):
+        try:
+            log_debug("[CACHE] Refreshing Ticker list from nselib...")
+            new_tickers = get_nifty250_tickers()
+            if new_tickers:
+                _cached_tickers = new_tickers
+                _ticker_last_fetched = now
+                log_debug(f"[CACHE] Ticker list updated: {len(_cached_tickers)} stocks.")
+            else:
+                log_debug("[CACHE] WARNING: nselib returned empty ticker list. Using existing cache.")
+        except Exception as e:
+            log_debug(f"[CACHE] Error fetching tickers: {e}")
+            
+    return _cached_tickers
+
+# Flags to track running background updaters (eventlet greenlets)
+_updating_main_cache = False
+_updating_prices_only = False
+_updating_vcp_cache = False
+_updating_accum_cache = False
+_updating_seasonal_cache = False
+
+CACHE_DURATION = 60  # 1 minute - fast refresh for real-time feel
+PRICES_ONLY_INTERVAL = 10 # 10 seconds for ultra-fast updates
+MARKET_DATA_CACHE_FILE = 'market_data_cache.json'
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
@@ -92,14 +146,14 @@ def get_market_data():
     Fetches data from source or cache.
     Returns cached data immediately, triggers background update if stale.
     """
+    global _updating_main_cache
     with CACHE["lock"]:
         # If in-memory cache exists, use it
         if CACHE["data"] is not None:
             # If data is stale, trigger background update but return stale data
             if (time.time() - CACHE["last_updated"] > CACHE_DURATION):
-                is_running = any(t.name == "MainCacheUpdater" for t in threading.enumerate())
-                if not is_running:
-                    threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+                if not _updating_main_cache:
+                    eventlet.spawn(refresh_main_cache)
             return CACHE["data"]
         
         # Try to load from file cache (for fast startup after deploy)
@@ -109,101 +163,323 @@ def get_market_data():
                     file_cache = json.load(f)
                 CACHE["data"] = file_cache.get('data', [])
                 CACHE["last_updated"] = file_cache.get('updated', 0)
-                print(f"[CACHE] Loaded {len(CACHE['data'])} stocks from file cache")
+                
+                # Sanity check: if last_updated is in the future, reset it
+                if CACHE["last_updated"] > time.time() + 300:
+                    log_debug(f"[CACHE] Warning: Cache timestamp {CACHE['last_updated']} is in the future. Resetting to 0.")
+                    CACHE["last_updated"] = 0
+                
+                log_debug(f"[CACHE] Loaded {len(CACHE['data'])} stocks from file cache")
                 # Trigger background refresh
-                threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+                if not _updating_main_cache:
+                    eventlet.spawn(refresh_main_cache)
                 return CACHE["data"]
             except Exception as e:
-                print(f"[CACHE] Failed to load file cache: {e}")
+                log_debug(f"[CACHE] Failed to load file cache: {e}")
             
     # No cache available - fetch synchronously (only happens once)
     return refresh_main_cache()
 
 def refresh_main_cache():
-    """Synchronous cache refresh for initial load or background thread"""
-    # print("Refreshing main cache...")
-    tickers = get_nifty250_tickers()
-    df = get_realtime_data(tickers)
-    
-    if not df.empty:
-        df = df.sort_values(by='Ticker')
-        data = df.to_dict(orient='records')
+    """Synchronous cache refresh for initial load or background greenlet"""
+    global _updating_main_cache
+    if _updating_main_cache:
+        return
         
-        with CACHE["lock"]:
-            CACHE["data"] = data
-            CACHE["last_updated"] = time.time()
+    with CACHE["lock"]:
+        if _updating_main_cache:
+            log_debug("[CACHE] Refresh already in progress. Skipping.")
+            return
+        _updating_main_cache = True
+
+    update_id = datetime.now().strftime("%H:%M:%S")
+    log_debug(f"[CACHE] Starting main cache refresh at {update_id}...")
+    try:
+        tickers = get_cached_tickers()
+        if not tickers:
+            log_debug(f"[CACHE] {update_id} No tickers available. Aborting.")
+            return []
+            
+        log_debug(f"[CACHE] Using {len(tickers)} tickers. Starting real-time data fetch...")
         
-        # Save to file for fast startup after deploy
-        try:
-            with open(MARKET_DATA_CACHE_FILE, 'w') as f:
-                json.dump({'data': data, 'updated': time.time()}, f)
-            print(f"[CACHE] Saved {len(data)} stocks to file cache")
-        except Exception as e:
-            print(f"[CACHE] Failed to save file cache: {e}")
-        
-        # Emit real-time update to all connected clients
-        try:
-            socketio.emit('market_data_update', {
-                'stocks': data,
-                'updated_at': datetime.now().isoformat()
+        def progress_cb(current, total):
+            try:
+                log_debug(f"[CACHE] {update_id} progress: Batch {current}/{total}")
+                socketio.emit('market_data_progress', {
+                    'current': current,
+                    'total': total,
+                'message': f"Batch {current} of {total} processed ({len(tickers) // total if total > 0 else 0} stocks)"
             }, namespace='/')
-            print("Real-time market data update emitted.")
-        except Exception as e:
-            print(f"Socket emit error (non-critical): {e}")
+            except Exception as e:
+                log_debug(f"[CACHE] Socket emit error in progress_cb: {e}")
+
+        def batch_complete_cb(batch_data):
+            with CACHE["lock"]:
+                # Ensure we have the latest base data before merging
+                if not CACHE["data"]:
+                    try:
+                        if os.path.exists(MARKET_DATA_CACHE_FILE):
+                            with open(MARKET_DATA_CACHE_FILE, 'r') as f:
+                                file_cache = json.load(f)
+                                CACHE["data"] = file_cache.get('data', [])
+                    except:
+                        pass
+                
+                if CACHE["data"] is None:
+                    CACHE["data"] = []
+                
+                # Merge new batch data into existing cache
+                current_data = {s['Ticker']: s for s in CACHE["data"]}
+                for stock in batch_data:
+                    ticker = stock['Ticker']
+                    # Keep track of previous price for direction animation
+                    if ticker in current_data:
+                        stock['PrevPrice'] = current_data[ticker].get('Price', 0)
+                        
+                        # If this is a Prices-Only update, preserve technicals from existing cache
+                        if stock.get('FetchMode') == 'Price':
+                            stock['RSI'] = current_data[ticker].get('RSI', 'N/A')
+                            stock['DMA 50'] = current_data[ticker].get('DMA 50', 'N/A')
+                            stock['DMA 100'] = current_data[ticker].get('DMA 100', 'N/A')
+                            stock['DMA 200'] = current_data[ticker].get('DMA 200', 'N/A')
+                            stock['Signal'] = current_data[ticker].get('Signal', 'Neutral')
+                            stock['Suggestion'] = current_data[ticker].get('Suggestion', 'Hold')
+                            stock['Score'] = current_data[ticker].get('Score', 0)
+                    
+                    current_data[ticker] = stock
+                
+                CACHE["data"] = sorted(current_data.values(), key=lambda x: x['Ticker'])
+                CACHE["last_updated"] = time.time()
+                
+                # Persist to disk on every batch for better resilience
+                try:
+                    with open(MARKET_DATA_CACHE_FILE, 'w') as f:
+                        json.dump({
+                            'data': CACHE["data"], 
+                            'last_updated': CACHE["last_updated"],
+                            'update_id': update_id
+                        }, f)
+                except Exception as e:
+                    log_debug(f"[CACHE] {update_id} Batch save error: {e}")
+
+            # Emit signal so frontend can refresh via AJAX
+            try:
+                socketio.emit('market_data_update', {
+                    'signal': 'refresh',
+                    'updated_at': datetime.now().isoformat(),
+                    'batch_size': len(batch_data)
+                }, namespace='/')
+                log_debug(f"[CACHE] {update_id} Incremental update signal emitted ({len(batch_data)} stocks).")
+            except Exception as e:
+                log_debug(f"[CACHE] {update_id} Socket emit error in batch_complete: {e}")
+
+        df = get_realtime_data(tickers, progress_callback=progress_cb, on_batch_complete=batch_complete_cb)
         
-        return data
-    return []
+        if not df.empty:
+            log_debug(f"[CACHE] {update_id} Fetch complete. Final processing for {len(df)} stocks...")
+            
+            # Use the already updated CACHE["data"] from callbacks for the final return
+            with CACHE["lock"]:
+                data = CACHE["data"]
+            
+            # Save final state to file for fast startup after deploy
+            try:
+                with open(MARKET_DATA_CACHE_FILE, 'w') as f:
+                    json.dump({'data': data, 'last_updated': time.time()}, f)
+                log_debug(f"[CACHE] {update_id} Saved final {len(data)} stocks to file cache")
+            except Exception as e:
+                log_debug(f"[CACHE] {update_id} Failed to save file cache: {e}")
+            
+            return data
+        else:
+            log_debug(f"[CACHE] {update_id} Received empty DataFrame from fetcher.")
+            return []
+    except Exception as e:
+        log_debug(f"[CACHE] {update_id} ERROR in refresh_main_cache: {e}")
+        return []
+    finally:
+        log_debug(f"[CACHE] {update_id} Refresh task finished.")
+        with CACHE["lock"]:
+            _updating_main_cache = False
+
+
+def refresh_prices_only():
+    """Hyper-fast refresh for Prices and Market Cap only"""
+    global _updating_prices_only
+    if _updating_prices_only:
+        return
+        
+    with CACHE["lock"]:
+        if _updating_prices_only:
+            return
+        _updating_prices_only = True
+
+    try:
+        tickers = get_cached_tickers()
+        if not tickers:
+            return
+
+        update_id = f"FAST-{datetime.now().strftime('%H:%M:%S')}"
+        log_debug(f"[FAST-CACHE] Starting fast price refresh at {update_id}...")
+        
+        def price_batch_cb(batch_data):
+            # Use the same batch_complete_cb logic (it now handles Price-Only mode)
+            # Re-creating a local version of update_id for the callback if needed
+            # but since we are inside refresh_prices_only, we can just call it
+            pass 
+
+        # We actually need to re-define or re-use the callback logic.
+        # Let's make a reusable merge function later, or just implement it here.
+        
+        # Actually, let's just use the same pattern as refresh_main_cache
+        # but with fetch_technicals=False
+        
+        update_id = f"FAST-{datetime.now().strftime('%H:%M:%S')}"
+        
+        def fast_batch_cb(batch_data):
+            log_debug(f"[FAST-CACHE] Received batch completion signal for {len(batch_data)} stocks.")
+            with CACHE["lock"]:
+                if not CACHE["data"]:
+                    return # Start with a full refresh first
+                
+                current_data = {s['Ticker']: s for s in CACHE["data"]}
+                for stock in batch_data:
+                    ticker = stock['Ticker']
+                    if ticker in current_data:
+                        # Price changed?
+                        old_price = current_data[ticker].get('Price', 0)
+                        if stock['Price'] != old_price:
+                            stock['PrevPrice'] = old_price
+                            # Keep indicators
+                            stock['RSI'] = current_data[ticker].get('RSI', 'N/A')
+                            stock['DMA 50'] = current_data[ticker].get('DMA 50', 'N/A')
+                            stock['DMA 100'] = current_data[ticker].get('DMA 100', 'N/A')
+                            stock['DMA 200'] = current_data[ticker].get('DMA 200', 'N/A')
+                            stock['Signal'] = current_data[ticker].get('Signal', 'Neutral')
+                            stock['Suggestion'] = current_data[ticker].get('Suggestion', 'Hold')
+                            stock['Score'] = current_data[ticker].get('Score', 0)
+                            current_data[ticker] = stock
+                
+                CACHE["data"] = sorted(current_data.values(), key=lambda x: x['Ticker'])
+                CACHE["last_updated"] = time.time()
+                
+                # Persist to disk
+                try:
+                    with open(MARKET_DATA_CACHE_FILE, 'w') as f:
+                        json.dump({
+                            'data': CACHE["data"], 
+                            'last_updated': CACHE["last_updated"],
+                            'update_id': update_id
+                        }, f)
+                except Exception as e:
+                    log_debug(f"[FAST-CACHE] Batch save error: {e}")
+            
+            # Signal UI
+            try:
+                socketio.emit('market_data_update', {
+                    'signal': 'refresh',
+                    'updated_at': datetime.now().isoformat(),
+                    'batch_size': len(batch_data),
+                    'mode': 'fast'
+                }, namespace='/')
+            except: pass
+
+        get_realtime_data(tickers, fetch_technicals=False, on_batch_complete=fast_batch_cb)
+        
+    except Exception as e:
+        log_debug(f"[FAST-CACHE] Error: {e}")
+    finally:
+        _updating_prices_only = False
 
 
 def start_market_data_auto_update():
-    """Start automatic market data updates every 2 minutes."""
-    def auto_update_loop():
+    """Start automatic market data updates using eventlet."""
+    
+    def slow_update_loop():
+        # Indicators update every 5 minutes
+        eventlet.sleep(30)
         while True:
             try:
-                time.sleep(120)  # 2 minutes
-                print("Auto-triggering market data update...")
-                with CACHE["lock"]:
-                    CACHE["last_updated"] = 0
+                log_debug("[AUTO] Internal Trigger: Full Refresh (Indicators)...")
                 refresh_main_cache()
+                eventlet.sleep(300) # 5 minutes
             except Exception as e:
-                print(f"Market data auto update error: {e}")
+                log_debug(f"Slow update loop error: {e}")
+                eventlet.sleep(60)
+
+    def fast_update_loop():
+        # Prices update every 10-15 seconds
+        eventlet.sleep(15)
+        while True:
+            try:
+                # Always trigger fast refresh unless a slow one is ACTIVELY downloading
+                # refresh_prices_only has its own lock too
+                log_debug("[AUTO] Internal Trigger: Fast Refresh (Prices)...")
+                refresh_prices_only()
+                eventlet.sleep(PRICES_ONLY_INTERVAL)
+            except Exception as e:
+                log_debug(f"Fast update loop error: {e}")
+                eventlet.sleep(PRICES_ONLY_INTERVAL)
     
-    thread = threading.Thread(target=auto_update_loop, name="MarketDataAutoUpdater", daemon=True)
-    thread.start()
-    print("Market data auto-update started (every 2 minutes)")
+    eventlet.spawn(slow_update_loop)
+    eventlet.spawn(fast_update_loop)
+    log_debug("Dual-speed market data updates started.")
 
 
-# Start auto-update on startup
-start_market_data_auto_update()
-
+# Index route
 @app.route('/')
 def index():
     """Home page - returns cached data immediately, fetches in background if needed"""
+    global _updating_main_cache
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('page_size', 20))
+    
+    stocks = []
+    total_pages = 0
+    total_count = 0
+
+    # Determine if this is a partial update request
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    log_debug(f"Index route called. Page: {page}, Ajax: {is_ajax}")
+    template = 'partials/stock_table.html' if is_ajax else 'index.html'
+
     with CACHE["lock"]:
         if CACHE["data"] is not None:
-            return render_template('index.html', stocks=CACHE["data"])
+            log_debug(f"Found in-memory cache: {len(CACHE['data'])} stocks")
+            stocks, total_pages, total_count = paginate(CACHE["data"], page, page_size)
+            return render_template(template, stocks=stocks, current_page=page, total_pages=total_pages, total_count=total_count, last_updated=CACHE["last_updated"])
     
-    # No cache - check file cache
+    # No in-memory cache - check file cache
     if os.path.exists(MARKET_DATA_CACHE_FILE):
         try:
             with open(MARKET_DATA_CACHE_FILE, 'r') as f:
                 file_cache = json.load(f)
-            stocks = file_cache.get('data', [])
+            raw_stocks = file_cache.get('data', [])
+            updated_at = file_cache.get('updated', 0)
+            log_debug(f"Found file cache: {len(raw_stocks)} stocks, updated {updated_at}")
+            
             with CACHE["lock"]:
-                CACHE["data"] = stocks
-                CACHE["last_updated"] = file_cache.get('updated', 0)
-            # Trigger background refresh
-            threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
-            return render_template('index.html', stocks=stocks)
-        except:
-            pass
+                CACHE["data"] = raw_stocks
+                CACHE["last_updated"] = updated_at
+            
+            stocks, total_pages, total_count = paginate(raw_stocks, page, page_size)
+            
+            # Trigger background refresh if stale or forced
+            if not _updating_main_cache:
+                log_debug("Triggering background refresh from file cache load")
+                eventlet.spawn(refresh_main_cache)
+                
+            return render_template(template, stocks=stocks, current_page=page, total_pages=total_pages, total_count=total_count, last_updated=updated_at)
+        except Exception as e:
+            log_debug(f"Error reading file cache: {e}")
     
     # No cache at all - return empty with loading state, fetch in background
-    is_running = any(t.name == "MainCacheUpdater" for t in threading.enumerate())
-    if not is_running:
-        threading.Thread(target=refresh_main_cache, name="MainCacheUpdater", daemon=True).start()
+    log_debug("No cache found. Returning empty state.")
+    if not _updating_main_cache:
+        log_debug("Triggering first background refresh")
+        eventlet.spawn(refresh_main_cache)
     
-    return render_template('index.html', stocks=[], loading=True)
+    return render_template(template, stocks=[], loading=True, current_page=1, total_pages=0, total_count=0)
 
 @app.route('/api/refresh')
 def refresh():
@@ -521,22 +797,20 @@ def seasonal_screener():
     return render_template('seasonal_screener.html')
 
 @app.route('/api/seasonal-screener')
-def get_seasonal_screener_data():
-    """
-    API to get seasonal analysis for all Nifty 250 stocks
-    This endpoint now performs DYNAMIC filtering and aggregation for Gain OR Loss
-    """
+def get_seasonal_data():
+    """API to get seasonal analysis results"""
+    global _updating_seasonal_cache
     from flask import request
     
     try:
-        min_gain = float(request.args.get('min_gain', 20))
-        direction = request.args.get('direction', 'gain') # 'gain' or 'loss'
+        min_gain = float(request.args.get('min_gain', 5))
+        direction = request.args.get('direction', 'gain')
         
         # Load from JSON cache file
         if not os.path.exists(SEASONAL_CACHE_FILE):
-            is_running = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
-            if not is_running:
-                threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
+            if not _updating_seasonal_cache:
+                _updating_seasonal_cache = True
+                eventlet.spawn(update_seasonal_cache)
                 
             return jsonify({
                 "status": "calculating", 
@@ -553,10 +827,13 @@ def get_seasonal_screener_data():
             if datetime.now() - updated_at > timedelta(seconds=SEASONAL_CACHE_TTL):
                 is_stale = True
         
-        is_updating = any(t.name == "SeasonalCacheUpdater" for t in threading.enumerate())
-        if is_stale and not is_updating:
-            threading.Thread(target=update_seasonal_cache, name="SeasonalCacheUpdater", daemon=True).start()
+        if is_stale and not _updating_seasonal_cache:
+            _updating_seasonal_cache = True
+            eventlet.spawn(update_seasonal_cache)
             
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        
         raw_stocks = cached_data.get('stocks_baseline_5', [])
         processed_stocks = []
         
@@ -678,6 +955,16 @@ def get_seasonal_screener_data():
         
         processed_stocks.sort(key=lambda x: x['total_rallies'], reverse=True)
         
+        # Inject live prices from main cache
+        with CACHE["lock"]:
+            if CACHE.get("data"):
+                live_lookup = {item['Ticker']: item for item in CACHE["data"]}
+                for s in processed_stocks:
+                    live_stock = live_lookup.get(s['ticker'])
+                    if live_stock:
+                        s['price'] = live_stock.get('Price', s.get('price'))
+                        s['prev_price'] = live_stock.get('PrevPrice', s.get('price'))
+
         return jsonify({
             'stocks': processed_stocks,
             'total_analyzed': len(raw_stocks),
@@ -695,6 +982,7 @@ def update_seasonal_cache():
     """
     Background worker to refresh the seasonal screener data
     """
+    global _updating_seasonal_cache
     print("Background update of seasonal cache started...")
     from seasonal_analysis import analyze_seasonal_patterns_v2
     import yfinance as yf
@@ -776,6 +1064,8 @@ def update_seasonal_cache():
         
     except Exception as e:
         print(f"Critical error in update_seasonal_cache: {e}")
+    finally:
+        _updating_seasonal_cache = False
 
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 ACCUMULATION_CACHE_FILE = 'accumulation_cache.json'
@@ -793,16 +1083,13 @@ def get_accumulation_data():
     API to get accumulation pattern scan results for all Nifty 250 stocks.
     Uses file-based cache with background refresh.
     """
+    global _updating_accum_cache
     try:
         # Check if cache file exists
         if not os.path.exists(ACCUMULATION_CACHE_FILE):
-            is_running = any(t.name == "AccumulationCacheUpdater" for t in threading.enumerate())
-            if not is_running:
-                threading.Thread(
-                    target=update_accumulation_cache,
-                    name="AccumulationCacheUpdater",
-                    daemon=True
-                ).start()
+            if not _updating_accum_cache:
+                _updating_accum_cache = True
+                eventlet.spawn(update_accumulation_cache)
             return jsonify({
                 "status": "calculating",
                 "message": "Scanning stocks for accumulation patterns. This takes 2-3 minutes.",
@@ -820,13 +1107,9 @@ def get_accumulation_data():
             if (datetime.now() - updated_at).total_seconds() > ACCUMULATION_CACHE_TTL:
                 is_stale = True
 
-        is_updating = any(t.name == "AccumulationCacheUpdater" for t in threading.enumerate())
-        if is_stale and not is_updating:
-            threading.Thread(
-                target=update_accumulation_cache,
-                name="AccumulationCacheUpdater",
-                daemon=True
-            ).start()
+        if is_stale and not _updating_accum_cache:
+            _updating_accum_cache = True
+            eventlet.spawn(update_accumulation_cache)
 
         # Apply client-side filters
         from flask import request
@@ -841,8 +1124,26 @@ def get_accumulation_data():
         if tag_filter != 'all':
             stocks = [s for s in stocks if s['tag'] == tag_filter]
 
+        # Inject live prices from main cache
+        with CACHE["lock"]:
+            if CACHE.get("data"):
+                live_lookup = {item['Ticker']: item for item in CACHE["data"]}
+                for s in stocks:
+                    live_stock = live_lookup.get(s['ticker'])
+                    if live_stock:
+                        s['price'] = live_stock.get('Price', s.get('price'))
+                        s['prev_price'] = live_stock.get('PrevPrice', s.get('price'))
+
+        # Paginate results
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        paginated_stocks, total_pages, total_count = paginate(stocks, page, page_size)
+
         return jsonify({
-            'stocks': stocks,
+            'stocks': paginated_stocks,
+            'total_pages': total_pages,
+            'current_page': page,
+            'total_count': total_count,
             'total_scanned': cached_data.get('total_scanned', 0),
             'total_matched': len(stocks),
             'breakdown': cached_data.get('breakdown', {}),
@@ -873,10 +1174,13 @@ def get_vcp_results():
     from datetime import datetime, timedelta
     from flask import request
 
+    global _updating_vcp_cache
     try:
         is_stale = False
         if not os.path.exists(VCP_CACHE_FILE):
-            threading.Thread(target=update_vcp_cache, name="VCPInitialUpdater", daemon=True).start()
+            if not _updating_vcp_cache:
+                _updating_vcp_cache = True
+                eventlet.spawn(update_vcp_cache)
             return jsonify({
                 'stocks': [],
                 'status': 'initializing'
@@ -888,16 +1192,36 @@ def get_vcp_results():
         updated_at = datetime.fromisoformat(cached_data.get('updated_at'))
         if datetime.now() - updated_at > timedelta(hours=4):
             is_stale = True
-            threading.Thread(target=update_vcp_cache, name="VCPCacheUpdater", daemon=True).start()
+            if not _updating_vcp_cache:
+                _updating_vcp_cache = True
+                eventlet.spawn(update_vcp_cache)
 
         stocks = cached_data.get('stocks', [])
         market_trend = cached_data.get('market_trend', {})
         sector_rankings = cached_data.get('sector_rankings', [])
         
+        # Inject live prices from main cache
+        with CACHE["lock"]:
+            if CACHE.get("data"):
+                live_lookup = {item['Ticker']: item for item in CACHE["data"]}
+                for s in stocks:
+                    live_stock = live_lookup.get(s['ticker'])
+                    if live_stock:
+                        s['price'] = live_stock.get('Price', s.get('price'))
+                        s['prev_price'] = live_stock.get('PrevPrice', s.get('price'))
+
+        # Paginate results
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        paginated_stocks, total_pages, total_count = paginate(stocks, page, page_size)
+        
         # Sanitize everything before return
         from vcp_detector import sanitize_data
         return jsonify(sanitize_data({
-            'stocks': stocks[:10],
+            'stocks': paginated_stocks,
+            'total_pages': total_pages,
+            'current_page': page,
+            'total_count': total_count,
             'market_trend': market_trend,
             'sector_rankings': sector_rankings,
             'updated_at': cached_data.get('updated_at'),
@@ -909,10 +1233,11 @@ def get_vcp_results():
         return jsonify({"error": str(e)}), 500
 
 def update_vcp_cache():
-    """Background worker to refresh VCP scanner data."""
+    """Background worker to refresh VCP scanner data using chunked processing."""
+    global _updating_vcp_cache
     print("VCP Cache Update Started...")
     from data_fetcher import get_nifty250_tickers, get_market_trend, get_sector_rankings
-    from vcp_detector import calculate_vcp_score, sanitize_data
+    from vcp_detector import calculate_vcp_score
     import yfinance as yf
     import json
     import os
@@ -920,23 +1245,56 @@ def update_vcp_cache():
 
     try:
         tickers = get_nifty250_tickers()
+        if not tickers:
+            print("Failed to fetch tickers for VCP update")
+            return
+
         market_trend = get_market_trend()
         sector_rankings = get_sector_rankings()
         
         all_results = []
-        data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
+        chunk_size = 20
+        total_batches = (len(tickers) + chunk_size - 1) // chunk_size
         
-        for ticker in tickers:
+        for i in range(0, len(tickers), chunk_size):
+            chunk = tickers[i:i + chunk_size]
+            current_batch = i // chunk_size + 1
+            print(f"VCP Scan: Processing batch {current_batch}/{total_batches}...")
+            
+            # Emit progress update
             try:
-                stock_df = data[ticker] if ticker in data.columns.levels[0] else None
-                if stock_df is not None and not stock_df.empty:
-                    res = calculate_vcp_score(stock_df, ticker.replace('.NS', ''))
-                    if res:
-                        # Append sector info
-                        all_results.append(res)
-            except: continue
+                socketio.emit('vcp_progress', {
+                    'current': current_batch,
+                    'total': total_batches,
+                    'message': f"Scanning stocks {i+1} to {min(i+chunk_size, len(tickers))} of {len(tickers)}..."
+                }, namespace='/')
+            except: pass
 
-        # Sort by: 1) Score (descending), 2) Absolute distance to resistance (ascending - closest to 0 first)
+            try:
+                # Batch download for the chunk
+                data = yf.download(chunk, period="1y", group_by='ticker', progress=False, timeout=30)
+                
+                for ticker in chunk:
+                    try:
+                        if isinstance(data.columns, pd.MultiIndex):
+                            if ticker in data.columns.levels[0]:
+                                stock_df = data[ticker].dropna(how='all')
+                            else: continue
+                        else:
+                            stock_df = data.dropna(how='all')
+                            
+                        if stock_df is not None and len(stock_df) >= 50:
+                            res = calculate_vcp_score(stock_df, ticker.replace('.NS', ''))
+                            if res:
+                                all_results.append(res)
+                    except Exception as e:
+                        print(f"Error processing {ticker}: {e}")
+                        continue
+            except Exception as batch_err:
+                print(f"Error in batch {current_batch}: {batch_err}")
+                continue
+
+        # Sort results
         all_results.sort(key=lambda x: (-x['score'], abs(x['details']['resistance']['pct_below'])))
         
         cache_content = {
@@ -946,35 +1304,31 @@ def update_vcp_cache():
             'updated_at': datetime.now().isoformat()
         }
 
+        # Atomic file write
         temp_file = VCP_CACHE_FILE + '.tmp'
         with open(temp_file, 'w') as f:
             json.dump(cache_content, f)
         
         if os.path.exists(VCP_CACHE_FILE): os.remove(VCP_CACHE_FILE)
         os.rename(temp_file, VCP_CACHE_FILE)
-        print("VCP Cache Updated Successfully.")
+        print(f"VCP Cache Updated. {len(all_results)} stocks matched.")
         
-        # Emit real-time update to all connected clients
+        # Emit completion signal
         try:
-            socketio.emit('vcp_update', sanitize_data({
-                'stocks': all_results[:10],
-                'market_trend': market_trend,
-                'sector_rankings': sector_rankings,
+            socketio.emit('vcp_update', {
+                'signal': 'refresh',
                 'updated_at': cache_content['updated_at'],
                 'status': 'fresh'
-            }), namespace='/')
-            print("Real-time VCP update emitted to clients.")
+            }, namespace='/')
         except Exception as emit_err:
-            print(f"Socket emit error (non-critical): {emit_err}")
-        
-        # Auto-execute paper trades on high-quality VCP signals
-        try:
-            auto_execute_vcp_trades(all_results)
-        except Exception as trade_err:
-            print(f"Auto-trade execution error (non-critical): {trade_err}")
-
+            print(f"Socket emit error: {emit_err}")
+            
     except Exception as e:
-        print(f"Error in VCP background update: {e}")
+        print(f"Critical error in update_vcp_cache: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        _updating_vcp_cache = False
 
 
 # WebSocket event handlers for real-time updates
@@ -996,33 +1350,32 @@ def handle_vcp_update_request():
     """Handle manual update request from client."""
     print('Client requested VCP update')
     # Trigger background update
-    is_updating = any(t.name == "VCPCacheUpdater" for t in threading.enumerate())
-    if not is_updating:
-        threading.Thread(target=update_vcp_cache, name="VCPCacheUpdater", daemon=True).start()
+    global _updating_vcp_cache
+    if not _updating_vcp_cache:
+        _updating_vcp_cache = True
+        eventlet.spawn(update_vcp_cache)
     emit('update_started', {'message': 'VCP scan started'})
 
 
 def start_vcp_auto_update():
-    """Start automatic VCP updates every 5 minutes."""
+    """Start automatic VCP updates every 2 minutes using eventlet."""
     def auto_update_loop():
         while True:
             try:
-                time.sleep(300)  # 5 minutes
+                eventlet.sleep(120)  # 2 minutes
                 print("Auto-triggering VCP update...")
                 update_vcp_cache()
             except Exception as e:
                 print(f"Auto update error: {e}")
     
-    thread = threading.Thread(target=auto_update_loop, name="VCPAutoUpdater", daemon=True)
-    thread.start()
-    print("VCP auto-update started (every 5 minutes)")
+    eventlet.spawn(auto_update_loop)
+    print("VCP auto-update started (every 2 minutes)")
 
 
-# Start auto-update on startup
-start_vcp_auto_update()
-
+# Background worker for accumulation scanner
 def update_accumulation_cache():
     """Background worker to refresh accumulation scanner data."""
+    global _updating_accum_cache
     print("Background update of accumulation cache started...")
     from accumulation_detector import scan_accumulation
     from datetime import datetime
@@ -1073,6 +1426,8 @@ def update_accumulation_cache():
         print(f"Critical error in update_accumulation_cache: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        _updating_accum_cache = False
 
 
 # ==================== PAPER TRADING API ENDPOINTS ====================
@@ -1217,24 +1572,34 @@ def update_paper_trades_with_market_data():
 
 
 def start_paper_trading_monitor():
-    """Start background thread to monitor paper trades"""
+    """Start background greenlet to monitor paper trades"""
     def monitor_loop():
         while True:
             try:
-                time.sleep(60)  # Check every minute
+                eventlet.sleep(30)  # Check every 30 seconds
                 update_paper_trades_with_market_data()
             except Exception as e:
                 print(f"Paper trading monitor error: {e}")
     
-    thread = threading.Thread(target=monitor_loop, name="PaperTradingMonitor", daemon=True)
-    thread.start()
-    print("Paper trading monitor started (checking every 60 seconds)")
+    eventlet.spawn(monitor_loop)
+    print("Paper trading monitor started (checking every 30 seconds)")
 
 
-# Start paper trading monitor on startup
-start_paper_trading_monitor()
-
-
+# Start heartbeats and auto-updates only in the main worker process
 if __name__ == '__main__':
+    # Initial startup log
+    log_debug(f"===== Server starting v{APP_VERSION} =====")
+    
+    # Wrap background tasks to only run in the main worker, not the reloader's watcher
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+        # Start auto-update on startup
+        start_market_data_auto_update()
+        
+        # Start paper trading background check
+        start_paper_trading_monitor()
+        
+        # Start VCP background update
+        start_vcp_auto_update()
+
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)
 

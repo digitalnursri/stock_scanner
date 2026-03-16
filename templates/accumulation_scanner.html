@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         .scanner-header {
             display: flex;
@@ -125,10 +125,21 @@
             margin-top: 4px;
         }
 
-        .summary-card.breakout .card-value { color: #10b981; }
-        .summary-card.pre-breakout .card-value { color: #f59e0b; }
-        .summary-card.accumulation .card-value { color: var(--accent); }
-        .summary-card.total .card-value { color: var(--text); }
+        .summary-card.breakout .card-value {
+            color: #10b981;
+        }
+
+        .summary-card.pre-breakout .card-value {
+            color: #f59e0b;
+        }
+
+        .summary-card.accumulation .card-value {
+            color: var(--accent);
+        }
+
+        .summary-card.total .card-value {
+            color: var(--text);
+        }
 
         /* Tag Badges */
         .tag-badge {
@@ -200,9 +211,17 @@
             transition: width 0.3s;
         }
 
-        .score-bar-fill .fill.high { background: #10b981; }
-        .score-bar-fill .fill.medium { background: #f59e0b; }
-        .score-bar-fill .fill.low { background: #ef4444; }
+        .score-bar-fill .fill.high {
+            background: #10b981;
+        }
+
+        .score-bar-fill .fill.medium {
+            background: #f59e0b;
+        }
+
+        .score-bar-fill .fill.low {
+            background: #ef4444;
+        }
 
         /* Results Table */
         .scanner-table-wrapper {
@@ -337,7 +356,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         .loading-text {
@@ -471,7 +492,7 @@
         </div>
 
         <!-- Results Table -->
-        <div class="scanner-table-wrapper" id="resultsContainer" style="display: none;">
+        <div class="scanner-table-wrapper" id="resultsContainer" style="display: none; position: relative;">
             <table class="scanner-table">
                 <thead>
                     <tr>
@@ -489,6 +510,26 @@
                 <tbody id="resultsBody">
                 </tbody>
             </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination-container" id="paginationNav" style="display: none;">
+            <div class="pagination-info">
+                Showing <span id="paginationStart">0</span> to <span id="paginationEnd">0</span> of <span
+                    id="paginationTotal">0</span> stocks
+            </div>
+            <div class="pagination-controls">
+                <button class="btn btn-secondary btn-sm" id="prevPage" onclick="changePage(currentPage - 1)">
+                    &laquo; Previous
+                </button>
+                <div class="page-numbers">
+                    <span class="page-current">Page <span id="currentPageDisplay">1</span> of <span
+                            id="totalPagesDisplay">1</span></span>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="nextPage" onclick="changePage(currentPage + 1)">
+                    Next &raquo;
+                </button>
+            </div>
         </div>
 
         <!-- Empty State -->
@@ -561,7 +602,8 @@
                     </div>
                 </div>
             </div>
-            <div style="margin-top: 16px; padding: 12px; background: var(--bg); border-radius: 8px; border-left: 4px solid #f59e0b;">
+            <div
+                style="margin-top: 16px; padding: 12px; background: var(--bg); border-radius: 8px; border-left: 4px solid #f59e0b;">
                 <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">
                     <strong style="color: #f59e0b;">Tagging:</strong>
                     🟢 <strong>Breakout</strong> = Close > 30D High + Volume > 2× avg &nbsp;|&nbsp;
@@ -578,216 +620,272 @@
         <div class="loading-text">Scanning for accumulation patterns... This may take a few minutes.</div>
     </div>
 
+    <style>
+        .pagination-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+
+        .loading-table-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 46, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            backdrop-filter: blur(2px);
+        }
+    </style>
+
     <script>
         let allResults = [];
         let sortColumn = 'score';
         let sortDirection = 'desc';
-        let activeTag = 'all';
+        let currentPage = 1;
+        let totalPages = 1;
+        let pageSize = 20;
+        let currentTagFilter = 'all';
+        let socket;
+        let isConnected = false;
 
-        // Tag filter toggle
+        // Tag Filter Logic
         document.querySelectorAll('.tag-filter-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.tag-filter-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                activeTag = btn.dataset.tag;
-                applyFiltersAndRender();
+                currentTagFilter = btn.dataset.tag;
+                currentPage = 1;
+                loadScannerData();
             });
         });
 
-        // Search filter
-        document.getElementById('searchFilter').addEventListener('input', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
+        // Search Filter Logic
+        let searchTimeout;
+        document.getElementById('searchFilter').addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                currentPage = 1;
+                loadScannerData();
+            }, 500);
         });
 
         document.getElementById('minScoreFilter').addEventListener('change', function () {
-            if (allResults.length > 0) applyFiltersAndRender();
+            currentPage = 1;
+            loadScannerData();
         });
 
-        async function loadScannerData() {
-            const btn = document.getElementById('scanBtn');
-            const loading = document.getElementById('loadingOverlay');
-
-            btn.disabled = true;
-            btn.textContent = '⏳ Scanning...';
-            loading.classList.add('active');
-
-            try {
-                const response = await fetch('/api/accumulation-scanner');
-                const data = await response.json();
-
-                if (data.status === 'calculating') {
-                    document.getElementById('emptyState').innerHTML = `
-                        <h3>⚙️ Initial Scan in Progress</h3>
-                        <p>${data.message}</p>
-                        <p style="font-size: 0.85rem; margin-top: 12px; color: #f59e0b;">
-                            Please wait 1-2 minutes and click "Scan Stocks" again.
-                        </p>
-                    `;
-                    document.getElementById('emptyState').style.display = 'block';
-                    document.getElementById('resultsContainer').style.display = 'none';
-                    document.getElementById('summaryCards').style.display = 'none';
-                } else if (data.stocks && data.stocks.length > 0) {
-                    allResults = data.stocks;
-                    
-                    // Update summary
-                    document.getElementById('totalScanned').textContent = data.total_scanned;
-                    document.getElementById('accumulationCount').textContent = data.breakdown.accumulation || 0;
-                    document.getElementById('preBreakoutCount').textContent = data.breakdown.pre_breakout || 0;
-                    document.getElementById('breakoutCount').textContent = data.breakdown.breakout || 0;
-
-                    document.getElementById('summaryCards').style.display = 'grid';
-                    document.getElementById('resultsContainer').style.display = 'block';
-                    document.getElementById('emptyState').style.display = 'none';
-
-                    applyFiltersAndRender();
-                } else {
-                    document.getElementById('emptyState').innerHTML = `
-                        <h3>📊 No Accumulation Patterns Found</h3>
-                        <p>No stocks currently match the accumulation criteria. Market conditions may not favor this pattern right now.</p>
-                    `;
-                    document.getElementById('emptyState').style.display = 'block';
-                    document.getElementById('resultsContainer').style.display = 'none';
-                    document.getElementById('summaryCards').style.display = 'none';
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to load scan data. Please try again.');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔍 Scan Stocks';
-                loading.classList.remove('active');
-            }
-        }
-
-        function applyFiltersAndRender() {
-            const minScore = parseInt(document.getElementById('minScoreFilter').value) || 0;
-            const searchQuery = document.getElementById('searchFilter').value.toUpperCase();
-
-            let filtered = allResults.filter(stock => {
-                if (activeTag !== 'all' && stock.tag !== activeTag) return false;
-                if (stock.score < minScore) return false;
-                if (searchQuery && !stock.ticker.toUpperCase().includes(searchQuery)) return false;
-                return true;
-            });
-
-            // Sort
-            filtered.sort((a, b) => {
-                let aVal = a[sortColumn];
-                let bVal = b[sortColumn];
-                if (aVal === undefined) aVal = 0;
-                if (bVal === undefined) bVal = 0;
-
-                if (typeof aVal === 'string') {
-                    return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-                }
-                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-            });
-
-            // Render
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = '';
-
-            const ruleNames = ['consolidation', 'atr', 'volume', 'delivery', 'support', 'hidden_buying', 'rsi', 'overextended'];
-            const ruleLabels = ['C', 'A', 'V', 'D', 'S', 'H', 'R', 'O'];
-
-            filtered.forEach(stock => {
-                const row = document.createElement('tr');
-                
-                // Tag class
-                const tagClass = stock.tag.toLowerCase().replace(' ', '-');
-                
-                // Score bar
-                const scoreMax = stock.max_score || 7;
-                const scorePct = (stock.score / scoreMax) * 100;
-                const scoreColor = scorePct >= 75 ? 'high' : scorePct >= 50 ? 'medium' : 'low';
-
-                // Rule indicators
-                let ruleHTML = '';
-                ruleNames.forEach((rule, idx) => {
-                    const detail = stock.details[rule];
-                    const passed = detail ? (detail.pass || detail.triggered || false) : false;
-                    const cls = passed ? 'pass' : 'fail';
-                    const icon = passed ? '✓' : '✗';
-                    ruleHTML += `<span class="rule-indicator ${cls}" title="${ruleLabels[idx]}: ${rule}">${icon}</span>`;
-                });
-
-                row.innerHTML = `
-                    <td><a href="/stock/${stock.ticker}" class="ticker-link">${stock.ticker}</a></td>
-                    <td><span class="tag-badge ${tagClass}">${stock.tag}</span></td>
-                    <td>
-                        <div class="score-bar">
-                            <strong>${stock.score}/${scoreMax}</strong>
-                            <div class="score-bar-fill">
-                                <div class="fill ${scoreColor}" style="width: ${scorePct}%"></div>
-                            </div>
-                        </div>
-                    </td>
-                    <td>₹${stock.price}</td>
-                    <td>${stock.price_range_30d}%</td>
-                    <td>${stock.vol_ratio}x</td>
-                    <td>${stock.rsi}</td>
-                    <td>${stock.dma50_status}</td>
-                    <td>${ruleHTML}</td>
-                `;
-                tbody.appendChild(row);
-            });
-        }
-
-        function sortByColumn(column) {
-            if (sortColumn === column) {
-                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-            } else {
-                sortColumn = column;
-                sortDirection = column === 'ticker' ? 'asc' : 'desc';
-            }
-            if (allResults.length > 0) applyFiltersAndRender();
-        }
-
-        // Socket.IO for real-time updates
-        let socket;
-        let isConnected = false;
-
+        // Initialize Socket
         function initSocket() {
-            socket = io();
-            
-            socket.on('connect', function() {
+            socket = io({
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000
+            });
+
+            socket.on('connect', () => {
                 console.log('Connected to real-time updates');
                 isConnected = true;
                 showNotification('Connected to live updates', 'success');
             });
-            
-            socket.on('disconnect', function() {
+
+            socket.on('disconnect', () => {
                 console.log('Disconnected from real-time updates');
                 isConnected = false;
                 showNotification('Disconnected from live updates', 'warning');
             });
-            
-            socket.on('accumulation_update', function(data) {
-                console.log('Accumulation data updated:', data);
-                showNotification(`Accumulation scan refreshed! ${data.total_matched} stocks found.`, 'success');
-                // Update data if user is viewing
-                if (document.getElementById('resultsContainer').style.display !== 'none') {
-                    allResults = data.stocks;
-                    document.getElementById('totalScanned').textContent = data.total_scanned;
-                    document.getElementById('accumulationCount').textContent = data.breakdown.accumulation || 0;
-                    document.getElementById('preBreakoutCount').textContent = data.breakdown.pre_breakout || 0;
-                    document.getElementById('breakoutCount').textContent = data.breakdown.breakout || 0;
-                    applyFiltersAndRender();
+
+            socket.on('market_data_update', function (data) {
+                if (data.signal === 'refresh') {
+                    console.log('Accumulation scanner refresh signal received');
+                    loadScannerData(true); // Silent refresh
                 }
             });
+
+            socket.on('accumulation_update', function (data) {
+                console.log('Accumulation update received');
+                showNotification(`Accumulation scan refreshed!`, 'success');
+                loadScannerData();
+            });
+
+            socket.on('reconnect', (attempt) => {
+                console.log('Reconnected after ' + attempt + ' attempts');
+                isConnected = true;
+                showNotification('Reconnected to live updates', 'success');
+            });
+        }
+
+        async function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            await loadScannerData();
+        }
+
+        async function loadScannerData(isSilent = false) {
+            const minScore = document.getElementById('minScoreFilter').value;
+            const search = document.getElementById('searchFilter').value;
+            const loading = document.getElementById('loadingOverlay');
+
+            if (!isSilent) {
+                if (currentPage === 1) loading.classList.add('active');
+                else showTableLoading(true);
+            }
+
+            try {
+                const url = `/api/accumulation-scanner?min_score=${minScore}&tag=${currentTagFilter}&search=${search}&page=${currentPage}&page_size=${pageSize}&sort_by=${sortColumn}&sort_direction=${sortDirection}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.status === 'calculating') {
+                    document.getElementById('emptyState').innerHTML = `<h3>⚙️ Initial Scan in Progress</h3><p>${data.message}</p>`;
+                    document.getElementById('emptyState').style.display = 'block';
+                    document.getElementById('resultsContainer').style.display = 'none';
+                    document.getElementById('summaryCards').style.display = 'none';
+                    document.getElementById('paginationNav').style.display = 'none';
+                } else if (data.stocks && data.stocks.length > 0) {
+                    renderTable(data.stocks);
+                    updatePaginationUI(data);
+                    updateSummaryCards(data);
+
+                    document.getElementById('resultsContainer').style.display = 'block';
+                    document.getElementById('emptyState').style.display = 'none';
+                    document.getElementById('summaryCards').style.display = 'grid';
+                } else {
+                    document.getElementById('emptyState').innerHTML = `<h3>📊 No Patterns Found</h3>`;
+                    document.getElementById('emptyState').style.display = 'block';
+                    document.getElementById('resultsContainer').style.display = 'none';
+                    document.getElementById('summaryCards').style.display = 'none';
+                    document.getElementById('paginationNav').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            } finally {
+                if (!isSilent) {
+                    loading.classList.remove('active');
+                    showTableLoading(false);
+                }
+            }
+        }
+
+        function showTableLoading(show) {
+            const container = document.getElementById('resultsContainer');
+            let overlay = container.querySelector('.loading-table-overlay');
+            if (show && !overlay) {
+                overlay = document.createElement('div');
+                overlay.className = 'loading-table-overlay';
+                overlay.innerHTML = '<div class="loading-spinner" style="width:30px;height:30px;border-width:3px;"></div>';
+                container.appendChild(overlay);
+            } else if (!show && overlay) {
+                overlay.remove();
+            }
+        }
+
+        function updatePaginationUI(data) {
+            const nav = document.getElementById('paginationNav');
+            nav.style.display = data.total_pages > 1 ? 'flex' : 'none';
+            document.getElementById('paginationStart').textContent = (data.current_page - 1) * pageSize + 1;
+            document.getElementById('paginationEnd').textContent = Math.min(data.current_page * pageSize, data.total_count);
+            document.getElementById('paginationTotal').textContent = data.total_count;
+            document.getElementById('currentPageDisplay').textContent = data.current_page;
+            document.getElementById('totalPagesDisplay').textContent = data.total_pages;
+            document.getElementById('prevPage').disabled = data.current_page === 1;
+            document.getElementById('nextPage').disabled = data.current_page === data.total_pages;
+            currentPage = data.current_page;
+            totalPages = data.total_pages;
+        }
+
+        function updateSummaryCards(data) {
+            document.getElementById('totalScanned').textContent = data.total_analyzed;
+            document.getElementById('accumulationCount').textContent = data.summary.accumulation;
+            document.getElementById('preBreakoutCount').textContent = data.summary.pre_breakout;
+            document.getElementById('breakoutCount').textContent = data.summary.breakout;
+        }
+
+        function renderTable(stocks) {
+            const tbody = document.getElementById('resultsBody');
+            
+            // Preserve scroll
+            const scrollPos = window.scrollY;
+            
+            let newHtml = '';
+            stocks.forEach(stock => {
+                const tagClass = stock.tag.toLowerCase().replace(' ', '-');
+                const scoreClass = stock.score >= 7 ? 'high' : stock.score >= 5 ? 'medium' : 'low';
+                
+                // Determine price color/animation based on prev_price from the backend
+                let priceClass = '';
+                if (stock.prev_price && stock.price > stock.prev_price) {
+                    priceClass = 'flash-up-text';
+                } else if (stock.prev_price && stock.price < stock.prev_price) {
+                    priceClass = 'flash-down-text';
+                }
+
+                newHtml += `
+                    <tr>
+                        <td><a href="/stock/${stock.ticker}" class="ticker-link">${stock.ticker}</a></td>
+                        <td><span class="tag-badge ${tagClass}">${stock.tag}</span></td>
+                        <td>
+                            <div class="score-bar">
+                                <strong>${stock.score}</strong>
+                                <div class="score-bar-fill"><div class="fill ${scoreClass}" style="width: ${(stock.score / 8) * 100}%"></div></div>
+                            </div>
+                        </td>
+                        <td class="${priceClass}">₹${stock.price}</td>
+                        <td>${stock.price_range_30d.toFixed(1)}%</td>
+                        <td>${stock.vol_ratio.toFixed(2)}x</td>
+                        <td>${stock.rsi.toFixed(0)}</td>
+                        <td><span style="color: ${stock.dma50_status ? '#10b981' : '#ef4444'}">${stock.dma50_status ? 'Above' : 'Below'}</span></td>
+                        <td>${renderRules(stock.rules)}</td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = newHtml;
+
+            // Clean up flashing classes after animation completes
+            setTimeout(() => {
+                document.querySelectorAll('.flash-up-text, .flash-down-text').forEach(el => {
+                    el.classList.remove('flash-up-text', 'flash-down-text');
+                });
+            }, 1000);
+
+            window.scrollTo(0, scrollPos); // Restore scroll
+        }
+
+        function renderRules(rules) {
+            return Object.entries(rules)
+                .map(([rule, passed]) => `<span class="rule-dot ${passed ? 'pass' : 'fail'}" title="${rule}"></span>`)
+                .join('');
         }
 
         function showNotification(message, type) {
             const notif = document.createElement('div');
             notif.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 12px 20px;
-                border-radius: 8px;
-                color: white;
-                font-weight: 500;
-                z-index: 9999;
+                position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+                border-radius: 8px; color: white; font-weight: 500; z-index: 9999;
                 animation: slideIn 0.3s ease;
                 background: ${type === 'success' ? '#10b981' : '#f59e0b'};
             `;
@@ -796,8 +894,7 @@
             setTimeout(() => notif.remove(), 5000);
         }
 
-        // Initialize socket on load
-        initSocket();
+        window.onload = () => initSocket();
     </script>
 </body>
 

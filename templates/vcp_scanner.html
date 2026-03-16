@@ -10,7 +10,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         :root {
             --primary: #6366f1;
@@ -51,6 +51,7 @@
             font-weight: 700;
             background: linear-gradient(to right, #818cf8, #c084fc);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -404,6 +405,7 @@
                 transform: translateX(100%);
                 opacity: 0;
             }
+
             to {
                 transform: translateX(0);
                 opacity: 1;
@@ -489,7 +491,7 @@
             </div>
         </div>
 
-        <h2 style="margin-bottom: 1.5rem;">🔥 Top 10 Breakout Watchlist</h2>
+        <h2 style="margin-bottom: 1.5rem;">🔥 Breakout Watchlist</h2>
         <div class="watchlist-container">
             <table id="vcp-table">
                 <thead>
@@ -509,6 +511,56 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Pagination -->
+        <div class="pagination-container" id="pagination-nav" style="display: none;">
+            <div class="pagination-info">
+                Showing <span id="paginationStart">0</span> to <span id="paginationEnd">0</span> of <span
+                    id="paginationTotal">0</span> stocks
+            </div>
+            <div class="pagination-controls">
+                <button class="btn btn-secondary btn-sm" id="prevPage" onclick="changePage(currentPage - 1)">
+                    &laquo; Previous
+                </button>
+                <div class="page-numbers">
+                    <span class="page-current">Page <span id="currentPageDisplay">1</span> of <span
+                            id="totalPagesDisplay">1</span></span>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="nextPage" onclick="changePage(currentPage + 1)">
+                    Next &raquo;
+                </button>
+            </div>
+        </div>
+
+        <style>
+            .pagination-container {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 1rem;
+                margin-top: 1.5rem;
+                padding: 1rem;
+                background: var(--card-bg);
+                border-radius: 12px;
+                border: 1px solid #334155;
+            }
+
+            .pagination-controls {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            }
+
+            .page-current {
+                font-weight: 500;
+                font-size: 0.9rem;
+            }
+
+            .btn-sm {
+                padding: 6px 12px;
+                font-size: 0.85rem;
+            }
+        </style>
     </div>
 
     <!-- Strategy Details Modal -->
@@ -532,6 +584,9 @@
 
     <script>
         let allStocksData = []; // Store globally for modal access
+        let currentPage = 1;
+        let totalPages = 1;
+        let pageSize = 20;
 
         function formatCheck(passed) {
             return passed ? '<span class="pass-icon">✓ PASS</span>' : '<span class="fail-icon">✗ FAIL</span>';
@@ -608,44 +663,94 @@
             }
         }
 
-        async function fetchResults() {
+        async function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            await fetchResults();
+        }
+
+        async function fetchResults(isSilent = false) {
             const loading = document.getElementById('loading');
             try {
-                const response = await fetch('/api/vcp-results');
+                const response = await fetch(`/api/vcp-results?page=${currentPage}&page_size=${pageSize}`);
                 const data = await response.json();
 
                 if (data.status === 'initializing') {
-                    loading.style.display = 'flex';
-                    setTimeout(fetchResults, 10000);
+                    if (!isSilent) loading.style.display = 'flex';
+                    setTimeout(() => fetchResults(isSilent), 10000);
                     return;
                 }
 
-                loading.style.display = 'none';
-                allStocksData = data.stocks; // Store globally
+                if (!isSilent) loading.style.display = 'none';
+                updateTableWithData(data);
 
-                // Update Trend Info
-                const trendEl = document.getElementById('nifty-trend');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // Socket.IO state
+        let socket;
+        let isConnected = false;
+
+        function showConnectionStatus(status) {
+            const updateInfo = document.getElementById('update-info');
+            if (!updateInfo) return;
+            if (status === 'connected') {
+                updateInfo.innerHTML = '<span style="color: #22c55e;">● Live</span> | Auto-updating';
+            } else {
+                updateInfo.innerHTML = '<span style="color: #ef4444;">● Offline</span> | Manual refresh only';
+            }
+        }
+
+        function updateTableWithData(data) {
+            const loading = document.getElementById('loading');
+            loading.style.display = 'none';
+
+            allStocksData = data.stocks;
+            totalPages = data.total_pages || 1;
+            currentPage = data.current_page || 1;
+
+            // Update Trend Info
+            const trendEl = document.getElementById('nifty-trend');
+            if (trendEl) {
                 trendEl.textContent = data.market_trend.uptrend ? 'Bullish 📈' : 'Cautious 📉';
                 trendEl.style.color = data.market_trend.uptrend ? 'var(--success)' : 'var(--danger)';
+            }
 
-                const sectorEl = document.getElementById('top-sector');
-                if (data.sector_rankings.length > 0) {
-                    sectorEl.textContent = data.sector_rankings[0].sector;
+            const sectorEl = document.getElementById('top-sector');
+            if (sectorEl && data.sector_rankings && data.sector_rankings.length > 0) {
+                sectorEl.textContent = data.sector_rankings[0].sector;
+            }
+
+            document.getElementById('update-info').textContent = 'Last Updated: ' + new Date(data.updated_at).toLocaleString() + ' | 🔄 Live';
+
+            // Update Table
+            const body = document.getElementById('vcp-body');
+
+            // Find existing rows to preserve animations if possible, or just re-render
+            const existingRows = Array.from(body.children);
+            const scrollPos = window.scrollY; // Preserve scroll
+
+            let newHtml = '';
+
+            data.stocks.forEach(s => {
+                const tagClass = s.tag.includes('Breakout') ? 'tag-breakout' : 'tag-high';
+                
+                // Determine price color/animation based on prev_price from the backend
+                let priceHtml = `₹${s.price}`;
+                let priceClass = '';
+                if (s.prev_price && s.price > s.prev_price) {
+                    priceClass = 'flash-up-text';
+                } else if (s.prev_price && s.price < s.prev_price) {
+                    priceClass = 'flash-down-text';
                 }
 
-                document.getElementById('update-info').textContent = 'Last Updated: ' + new Date(data.updated_at).toLocaleString();
-
-                // Update Table
-                const body = document.getElementById('vcp-body');
-                body.innerHTML = '';
-
-                data.stocks.forEach(s => {
-                    const row = document.createElement('tr');
-                    const tagClass = s.tag.includes('Breakout') ? 'tag-breakout' : 'tag-high';
-                    row.innerHTML = `
+                newHtml += `
+                    <tr>
                         <td class="ticker clickable-ticker" onclick="showDetails('${s.ticker}')" title="Click to view strategy details">${s.ticker}</td>
                         <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
-                        <td>₹${s.price}</td>
+                        <td class="${priceClass}">₹${s.price}</td>
                         <td style="color: var(--warning)">
                             <div>₹${s.resistance}</div>
                             <div style="font-size: 0.8rem; color: var(--text-dim)">${Math.abs(s.details.resistance.pct_below)}% away</div>
@@ -658,121 +763,50 @@
                         <td style="color: var(--success); font-weight: 600;">${s.target}</td>
                         <td style="color: var(--danger)">₹${s.stop_loss}</td>
                         <td><strong>${s.score}/7</strong></td>
-                    `;
-                    body.appendChild(row);
-                });
-
-            } catch (err) {
-                console.error(err);
-            }
-        }
-
-        // Socket.IO for real-time updates
-        let socket;
-        let isConnected = false;
-
-        function initSocket() {
-            socket = io();
-            
-            socket.on('connect', function() {
-                console.log('Connected to real-time updates');
-                isConnected = true;
-                showConnectionStatus('connected');
-            });
-            
-            socket.on('disconnect', function() {
-                console.log('Disconnected from real-time updates');
-                isConnected = false;
-                showConnectionStatus('disconnected');
-            });
-            
-            socket.on('vcp_update', function(data) {
-                console.log('Received real-time VCP update');
-                updateTableWithData(data);
-            });
-            
-            socket.on('update_started', function(data) {
-                console.log('Update started:', data.message);
-                document.getElementById('loading').style.display = 'flex';
-            });
-        }
-
-        function showConnectionStatus(status) {
-            const updateInfo = document.getElementById('update-info');
-            if (status === 'connected') {
-                updateInfo.innerHTML = '<span style="color: #22c55e;">● Live</span> | Auto-updating every 5 min';
-            } else {
-                updateInfo.innerHTML = '<span style="color: #ef4444;">● Offline</span> | Manual refresh only';
-            }
-        }
-
-        function updateTableWithData(data) {
-            const loading = document.getElementById('loading');
-            loading.style.display = 'none';
-            
-            allStocksData = data.stocks;
-            
-            // Update Trend Info
-            const trendEl = document.getElementById('nifty-trend');
-            trendEl.textContent = data.market_trend.uptrend ? 'Bullish 📈' : 'Cautious 📉';
-            trendEl.style.color = data.market_trend.uptrend ? 'var(--success)' : 'var(--danger)';
-            
-            const sectorEl = document.getElementById('top-sector');
-            if (data.sector_rankings && data.sector_rankings.length > 0) {
-                sectorEl.textContent = data.sector_rankings[0].sector;
-            }
-            
-            document.getElementById('update-info').textContent = 'Last Updated: ' + new Date(data.updated_at).toLocaleString() + ' | 🔄 Auto-updating';
-            
-            // Update Table
-            const body = document.getElementById('vcp-body');
-            body.innerHTML = '';
-            
-            data.stocks.forEach(s => {
-                const row = document.createElement('tr');
-                const tagClass = s.tag.includes('Breakout') ? 'tag-breakout' : 'tag-high';
-                row.innerHTML = `
-                    <td class="ticker clickable-ticker" onclick="showDetails('${s.ticker}')" title="Click to view strategy details">${s.ticker}</td>
-                    <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
-                    <td>₹${s.price}</td>
-                    <td style="color: var(--warning)">
-                        <div>₹${s.resistance}</div>
-                        <div style="font-size: 0.8rem; color: var(--text-dim)">${Math.abs(s.details.resistance.pct_below)}% away</div>
-                    </td>
-                    <td>
-                        <div style="font-size: 0.8rem; color: var(--text-dim)">Range:</div>
-                        <div style="font-weight: 600; color: #818cf8;">${s.recommended_buy_price || 'N/A'}</div>
-                        <div style="font-size: 0.8rem; color: var(--text-dim)">Stop: ₹${s.buy_stop_price || 'N/A'}</div>
-                    </td>
-                    <td style="color: var(--success); font-weight: 600;">${s.target}</td>
-                    <td style="color: var(--danger)">₹${s.stop_loss}</td>
-                    <td><strong>${s.score}/7</strong></td>
+                    </tr>
                 `;
-                body.appendChild(row);
             });
+            
+            body.innerHTML = newHtml;
+
+            // Clean up flashing classes after animation completes
+            setTimeout(() => {
+                document.querySelectorAll('.flash-up-text, .flash-down-text').forEach(el => {
+                    el.classList.remove('flash-up-text', 'flash-down-text');
+                });
+            }, 1000);
+
+            window.scrollTo(0, scrollPos); // Restore scroll
+
+            // Update Pagination UI
+            const nav = document.getElementById('pagination-nav');
+            if (nav) {
+                nav.style.display = totalPages > 1 ? 'flex' : 'none';
+                document.getElementById('paginationStart').textContent = (currentPage - 1) * pageSize + 1;
+                document.getElementById('paginationEnd').textContent = Math.min(currentPage * pageSize, data.total_count);
+                document.getElementById('paginationTotal').textContent = data.total_count;
+                document.getElementById('currentPageDisplay').textContent = currentPage;
+                document.getElementById('totalPagesDisplay').textContent = totalPages;
+                document.getElementById('prevPage').disabled = currentPage === 1;
+                document.getElementById('nextPage').disabled = currentPage === totalPages;
+            }
         }
 
         async function refreshData() {
             const btn = document.getElementById('refreshBtn');
             const icon = document.getElementById('refreshIcon');
             const loading = document.getElementById('loading');
-            
+
             // Disable button and show loading
             btn.disabled = true;
             btn.style.opacity = '0.6';
             icon.textContent = '⏳';
             loading.style.display = 'flex';
-            
+
             try {
-                if (isConnected && socket) {
-                    // Use WebSocket for real-time update
-                    socket.emit('request_vcp_update');
-                } else {
-                    // Fallback to HTTP
-                    await fetch('/api/refresh');
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    await fetchResults();
-                }
+                await fetch('/api/refresh');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                await fetchResults();
             } catch (err) {
                 console.error('Refresh failed:', err);
                 alert('Refresh failed. Please try again.');
@@ -790,36 +824,40 @@
             try {
                 const response = await fetch('/api/paper-trading/stats?days=30');
                 const data = await response.json();
-                
+
                 if (data.error) {
                     console.error('Error loading paper trading stats:', data.error);
                     return;
                 }
-                
+
                 // Update P&L display
                 const totalPnL = data.total_pnl || 0;
                 const totalPnLEl = document.getElementById('totalPnL');
                 totalPnLEl.textContent = (totalPnL >= 0 ? '+' : '') + '₹' + totalPnL.toLocaleString();
                 totalPnLEl.className = 'pnl-value ' + (totalPnL >= 0 ? 'positive' : 'negative');
-                
+
                 const avgPnL = data.avg_pnl_per_trade || 0;
                 const avgPnLEl = document.getElementById('avgPnL');
                 avgPnLEl.textContent = (avgPnL >= 0 ? '+' : '') + '₹' + avgPnL.toLocaleString();
                 avgPnLEl.className = 'pnl-value ' + (avgPnL >= 0 ? 'positive' : 'negative');
-                
+
                 // Best/Worst trade
                 if (data.best_trade) {
                     document.getElementById('bestTrade').textContent = data.best_trade.ticker + ' +' + data.best_trade.pnl_percent + '%';
+                } else {
+                    document.getElementById('bestTrade').textContent = '--';
                 }
                 if (data.worst_trade) {
                     document.getElementById('worstTrade').textContent = data.worst_trade.ticker + ' ' + data.worst_trade.pnl_percent + '%';
+                } else {
+                    document.getElementById('worstTrade').textContent = '--';
                 }
-                
+
                 // Mini stats
                 document.getElementById('winRate').textContent = 'Win Rate: ' + (data.win_rate || 0) + '%';
                 document.getElementById('totalTrades').textContent = 'Total: ' + (data.closed_trades || 0);
                 document.getElementById('activeTradeCount').textContent = 'Active: ' + (data.active_trades || 0);
-                
+
             } catch (err) {
                 console.error('Failed to load paper trading stats:', err);
             }
@@ -829,24 +867,26 @@
             try {
                 const response = await fetch('/api/paper-trading/active-trades');
                 const data = await response.json();
-                
+
                 const container = document.getElementById('activeTradesList');
-                
+                document.getElementById('activeTradeCount').textContent = `Active: ${data.trades ? data.trades.length : 0}`;
+
+
                 if (!data.trades || data.trades.length === 0) {
                     container.innerHTML = '<span style="color: var(--text-dim); font-size: 0.85rem;">No active trades</span>';
                     return;
                 }
-                
+
                 let html = '';
                 data.trades.forEach(trade => {
                     html += `
                         <span class="trade-tag active" title="Entry: ₹${trade.entry_price} | Target: ₹${trade.target_low}-${trade.target_high} | SL: ₹${trade.stop_loss}">
-                            ${trade.ticker} @ ₹${trade.entry_price}
+                            <strong>${trade.ticker}</strong> ₹${trade.entry_price} → <span style="color: ${trade.current_pnl >= 0 ? 'var(--success)' : 'var(--danger)'}">₹${trade.current_price} (${trade.pnl_pct}%)</span>
                         </span>
                     `;
                 });
                 container.innerHTML = html;
-                
+
             } catch (err) {
                 console.error('Failed to load active trades:', err);
             }
@@ -855,7 +895,7 @@
         function showTradeNotification(type, data) {
             const notif = document.createElement('div');
             notif.className = 'trade-notification ' + type;
-            
+
             if (type === 'new-trade') {
                 notif.innerHTML = `
                     <div style="font-weight: 700; margin-bottom: 4px;">🚀 New Trade Executed</div>
@@ -871,7 +911,7 @@
                     <div style="font-size: 0.8rem; opacity: 0.9;">Reason: ${data.reason}</div>
                 `;
             }
-            
+
             document.body.appendChild(notif);
             setTimeout(() => {
                 notif.style.opacity = '0';
@@ -880,59 +920,106 @@
             }, 5000);
         }
 
-        // Extend initSocket to handle paper trading events
-        const originalInitSocket = initSocket;
-        initSocket = function() {
-            socket = io();
-            
-            socket.on('connect', function() {
+        // Unified initSocket with signal-based refresh and paper trading events
+        function initSocket() {
+            socket = io({
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 10000
+            });
+
+            socket.on('connect', function () {
                 console.log('Connected to real-time updates');
                 isConnected = true;
                 showConnectionStatus('connected');
             });
-            
-            socket.on('disconnect', function() {
+
+            socket.on('disconnect', function () {
                 console.log('Disconnected from real-time updates');
                 isConnected = false;
                 showConnectionStatus('disconnected');
             });
-            
-            socket.on('vcp_update', function(data) {
-                console.log('Received real-time VCP update');
-                updateTableWithData(data);
+
+            // Listen for the fast tick update event from the main loop
+            socket.on('market_data_update', function (data) {
+                if (data.signal === 'refresh') {
+                    console.log('Live price update received...');
+                    fetchResults(true); // Silent refresh
+                }
             });
-            
-            socket.on('update_started', function(data) {
+
+            socket.on('vcp_update', function (data) {
+                if (data.signal === 'refresh') {
+                    console.log('Refreshing VCP data via signal...');
+                    document.getElementById('loading').style.display = 'none';
+                    fb('Done! Scan complete.');
+                    fetchResults();
+                } else {
+                    updateTableWithData(data);
+                }
+            });
+
+            socket.on('vcp_progress', function (data) {
+                const loadingText = document.querySelector('#loading p');
+                if (loadingText) {
+                    loadingText.innerHTML = `${data.message}<br><small>Batch ${data.current} of ${data.total}</small>`;
+                }
+            });
+
+            socket.on('update_started', function (data) {
                 console.log('Update started:', data.message);
                 document.getElementById('loading').style.display = 'flex';
+                fb('Starting VCP scanning...');
             });
-            
+
+            function fb(msg) {
+                const statusEl = document.getElementById('update-info');
+                if (statusEl) {
+                    const time = new Date().toLocaleTimeString();
+                    statusEl.innerHTML += ` | <span style="color:#6366f1">${time}: ${msg}</span>`;
+                }
+            }
+
             // Paper trading events
-            socket.on('new_paper_trade', function(data) {
+            socket.on('new_paper_trade', function (data) {
                 console.log('New paper trade:', data);
                 showTradeNotification('new-trade', data);
                 loadPaperTradingStats();
                 loadActiveTrades();
             });
-            
-            socket.on('trade_closed', function(data) {
+
+            socket.on('trade_closed', function (data) {
                 console.log('Trade closed:', data);
                 showTradeNotification('trade-closed', data);
                 loadPaperTradingStats();
                 loadActiveTrades();
             });
-            
-            socket.on('active_trades_update', function(data) {
+
+            socket.on('active_trades_update', function (data) {
                 loadActiveTrades();
             });
-        };
 
-        window.onload = function() {
+            socket.on('reconnect', function (attemptNumber) {
+                console.log('Reconnected after ' + attemptNumber + ' attempts');
+                isConnected = true;
+                showConnectionStatus('connected');
+                fetchResults(); // Refresh data on reconnect
+            });
+
+            socket.on('reconnect_attempt', function (attemptNumber) {
+                console.log('Reconnection attempt #' + attemptNumber);
+            });
+        }
+
+        window.onload = function () {
             initSocket();
             fetchResults();
             loadPaperTradingStats();
             loadActiveTrades();
-            
+
             // Refresh paper trading stats every 30 seconds
             setInterval(() => {
                 loadPaperTradingStats();
