@@ -442,10 +442,63 @@ def index():
     log_debug(f"Index route called. Page: {page}, Ajax: {is_ajax}")
     template = 'partials/stock_table.html' if is_ajax else 'index.html'
 
+    # Filter and sort configurations
+    search = request.args.get('search', '').upper()
+    signal_filter = request.args.get('signal', 'all')
+    action_filter = request.args.get('action', 'all')
+    rsi_filter = request.args.get('rsi', 'all')
+    sort_raw = request.args.get('sort', 'score-desc')
+    
+    def apply_filters_and_sort(raw_data):
+        filtered = []
+        for s in raw_data:
+            ticker = s.get('Ticker', '').upper()
+            if search and search not in ticker: continue
+            if signal_filter != 'all' and s.get('Signal') != signal_filter: continue
+            if action_filter != 'all' and s.get('Suggestion') != action_filter: continue
+            
+            rsi_val = s.get('RSI', 50)
+            if not isinstance(rsi_val, (int, float)):
+                try: rsi_val = float(rsi_val)
+                except: rsi_val = 50
+                
+            if rsi_filter == 'oversold' and rsi_val >= 30: continue
+            if rsi_filter == 'overbought' and rsi_val <= 70: continue
+            
+            filtered.append(s)
+            
+        # Parse sort param (e.g., 'score-desc', 'price-asc')
+        try:
+            sort_col, sort_dir = sort_raw.split('-')
+        except:
+            sort_col, sort_dir = 'score', 'desc'
+            
+        reverse = (sort_dir == 'desc')
+        
+        def sort_key(x):
+            if sort_col == 'ticker': return x.get('Ticker', '')
+            if sort_col == 'price': return float(x.get('Price', 0))
+            if sort_col == 'rsi': 
+                val = x.get('RSI', 50)
+                try: return float(val) if val != 'N/A' else 50
+                except: return 50
+            if sort_col == 'score': return int(x.get('Score', 0))
+            if sort_col == 'mcap':
+                mcap = x.get('Market Cap', '0')
+                if isinstance(mcap, str):
+                    try: return float(''.join(c for c in mcap if c.isdigit() or c == '.'))
+                    except: return 0
+                return float(mcap)
+            return int(x.get('Score', 0))
+            
+        filtered.sort(key=sort_key, reverse=reverse)
+        return filtered
+
     with CACHE["lock"]:
         if CACHE["data"] is not None:
             log_debug(f"Found in-memory cache: {len(CACHE['data'])} stocks")
-            stocks, total_pages, total_count = paginate(CACHE["data"], page, page_size)
+            processed_data = apply_filters_and_sort(CACHE["data"])
+            stocks, total_pages, total_count = paginate(processed_data, page, page_size)
             return render_template(template, stocks=stocks, current_page=page, total_pages=total_pages, total_count=total_count, last_updated=CACHE["last_updated"])
     
     # No in-memory cache - check file cache
@@ -461,7 +514,8 @@ def index():
                 CACHE["data"] = raw_stocks
                 CACHE["last_updated"] = updated_at
             
-            stocks, total_pages, total_count = paginate(raw_stocks, page, page_size)
+            processed_data = apply_filters_and_sort(raw_stocks)
+            stocks, total_pages, total_count = paginate(processed_data, page, page_size)
             
             # Trigger background refresh if stale or forced
             if not _updating_main_cache:

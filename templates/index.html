@@ -314,8 +314,15 @@
         async function refreshTableData(isSilent = false) {
             if (!isSilent) showLoading(true);
             try {
-                // Add cache-buster to URL
-                const url = `/?page=${currentPage}&page_size=${pageSize}&t=${new Date().getTime()}`;
+                // Get active filters and sort
+                const search = document.getElementById("searchInput").value;
+                const signalFilter = document.getElementById("signalFilter").value;
+                const actionFilter = document.getElementById("actionFilter").value;
+                const rsiFilter = document.getElementById("rsiFilter").value;
+                const sortFilter = document.getElementById("sortBy").value;
+                
+                // Add cache-buster to URL and pass parameters
+                const url = `/?page=${currentPage}&page_size=${pageSize}&search=${encodeURIComponent(search)}&signal=${encodeURIComponent(signalFilter)}&action=${encodeURIComponent(actionFilter)}&rsi=${encodeURIComponent(rsiFilter)}&sort=${encodeURIComponent(sortFilter)}&t=${new Date().getTime()}`;
                 const response = await fetch(url, {
                     headers: { 'X-Requested-With': 'XMLHttpRequest' }
                 });
@@ -328,11 +335,7 @@
                 if (oldContent) {
                     oldContent.innerHTML = html;
 
-                    // The partial includes its own script to update lastUpdated
-                    // We also need to re-run animations or ensure they are visible.
-                    // The classes flash-up/flash-down are already in the HTML.
-
-                    // Optional: Remove flash classes after a few seconds so they can fire again next time
+                    // Remove flash classes after a few seconds so they can fire again next time
                     setTimeout(() => {
                         document.querySelectorAll('.flash-up, .flash-down').forEach(el => {
                             el.classList.remove('flash-up', 'flash-down');
@@ -344,12 +347,6 @@
                 const lastUpdatedEl = document.getElementById('lastUpdated');
                 if (lastUpdatedEl) {
                     lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-                }
-
-                // Re-apply client-side filters and sorting if the table exists
-                if (document.getElementById('stockTable')) {
-                    applyFilters();
-                    sortTable();
                 }
 
                 if (isSilent) {
@@ -382,58 +379,13 @@
         }
 
         function applyFilters() {
-            const search = document.getElementById("searchInput").value.toUpperCase();
-            const signalFilter = document.getElementById("signalFilter").value;
-            const actionFilter = document.getElementById("actionFilter").value;
-            const rsiFilter = document.getElementById("rsiFilter").value;
-            const rows = document.querySelectorAll("#stockTable tbody tr");
-            let count = 0;
-
-            rows.forEach(row => {
-                const ticker = row.cells[0].textContent.toUpperCase();
-                const rsi = parseFloat(row.dataset.rsi);
-                const signal = row.dataset.signal;
-                const action = row.dataset.suggestion;
-                let show = true;
-
-                if (search && !ticker.includes(search)) show = false;
-                if (signalFilter !== "all" && signal !== signalFilter) show = false;
-                if (actionFilter !== "all" && action !== actionFilter) show = false;
-                if (rsiFilter === "oversold" && (isNaN(rsi) || rsi >= 30)) show = false;
-                if (rsiFilter === "overbought" && (isNaN(rsi) || rsi <= 70)) show = false; row.style.display = show ? "" : "none";
-                if (show) count++;
-            }); document.getElementById("stockCount").textContent = `${count} stocks (current page)`;
+            currentPage = 1;
+            refreshTableData();
         }
+
         function sortTable() {
-            const sortBy = document.getElementById("sortBy").value; const
-                tbody = document.querySelector("#stockTable tbody"); if (!tbody) return; const
-                    rows = Array.from(tbody.querySelectorAll("tr")); rows.sort((a, b) => {
-                        const [col, order] = sortBy.split("-");
-                        let valA, valB;
-
-                        if (col === "ticker") {
-                            valA = a.cells[0].textContent;
-                            valB = b.cells[0].textContent;
-                            return order === "asc" ? valA.localeCompare(valB) : valB.localeCompare(valA);
-                        } else if (col === "price") {
-                            valA = parseFloat(a.dataset.price) || 0;
-                            valB = parseFloat(b.dataset.price) || 0;
-                        } else if (col === "rsi") {
-                            valA = parseFloat(a.dataset.rsi) || 50;
-                            valB = parseFloat(b.dataset.rsi) || 50;
-                        } else if (col === "mcap") {
-                            valA = parseFloat(a.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
-                            valB = parseFloat(b.dataset.mcap.replace(/[^0-9.]/g, '')) || 0;
-                        } else if (col === "score") {
-                            valA = parseInt(a.dataset.score) || 0;
-                            valB = parseInt(b.dataset.score) || 0;
-                        }
-
-                        return order === "asc" ? valA - valB : valB - valA;
-                    });
-
-            rows.forEach(row => tbody.appendChild(row));
-            applyFilters();
+            currentPage = 1;
+            refreshTableData();
         }
 
         function resetFilters() {
@@ -443,7 +395,6 @@
             document.getElementById("rsiFilter").value = "all";
             document.getElementById("sortBy").value = "score-desc";
             applyFilters();
-            sortTable();
         }
 
         // Socket.IO for real-time updates
