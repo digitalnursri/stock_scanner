@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='live_prices.js') }}?v=1.0"></script>
     <style>
         .scanner-header {
             display: flex;
@@ -716,12 +717,8 @@
                 showNotification('Disconnected from live updates', 'warning');
             });
 
-            socket.on('market_data_update', function (data) {
-                if (data.signal === 'refresh') {
-                    console.log('Accumulation scanner refresh signal received');
-                    loadScannerData(true); // Silent refresh
-                }
-            });
+            // Initialize centralized live price manager
+            LivePriceManager.init(socket);
 
             socket.on('accumulation_update', function (data) {
                 console.log('Accumulation update received');
@@ -851,7 +848,7 @@
                                 <div class="score-bar-fill"><div class="fill ${scoreClass}" style="width: ${(stock.score / 8) * 100}%"></div></div>
                             </div>
                         </td>
-                        <td class="${priceClass}">₹${stock.price}</td>
+                        <td class="${priceClass}" data-live-ticker="${stock.ticker}">₹${stock.price}</td>
                         <td>${stock.price_range_30d.toFixed(1)}%</td>
                         <td>${stock.vol_ratio.toFixed(2)}x</td>
                         <td>${stock.rsi.toFixed(0)}</td>

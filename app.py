@@ -365,12 +365,21 @@ def refresh_prices_only():
         
         # Signal UI to refresh
         if updated_count > 0:
+            changed_prices = {}
+            for ticker, live_info in current_data.items():
+                if live_info.get('Price') != live_info.get('PrevPrice'):
+                    changed_prices[ticker] = {
+                        'p': live_info.get('Price'),
+                        'prev': live_info.get('PrevPrice')
+                    }
+            
             try:
                 socketio.emit('market_data_update', {
                     'signal': 'refresh',
                     'updated_at': datetime.now().isoformat(),
                     'batch_size': updated_count,
-                    'mode': 'nse_live'
+                    'mode': 'nse_live',
+                    'live_prices': changed_prices
                 }, namespace='/')
             except: pass
         

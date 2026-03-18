@@ -11,6 +11,7 @@
     <meta http-equiv="Expires" content="0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='live_prices.js') }}?v=1.0"></script>
     <style>
         :root {
             --primary: #6366f1;
@@ -750,7 +751,7 @@
                     <tr>
                         <td class="ticker clickable-ticker" onclick="showDetails('${s.ticker}')" title="Click to view strategy details">${s.ticker}</td>
                         <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
-                        <td class="${priceClass}">₹${s.price}</td>
+                        <td class="${priceClass}" data-live-ticker="${s.ticker}">₹${s.price}</td>
                         <td style="color: var(--warning)">
                             <div>₹${s.resistance}</div>
                             <div style="font-size: 0.8rem; color: var(--text-dim)">${Math.abs(s.details.resistance.pct_below)}% away</div>
@@ -943,13 +944,8 @@
                 showConnectionStatus('disconnected');
             });
 
-            // Listen for the fast tick update event from the main loop
-            socket.on('market_data_update', function (data) {
-                if (data.signal === 'refresh') {
-                    console.log('Live price update received...');
-                    fetchResults(true); // Silent refresh
-                }
-            });
+            // Initialize centralized live price manager
+            LivePriceManager.init(socket);
 
             socket.on('vcp_update', function (data) {
                 if (data.signal === 'refresh') {

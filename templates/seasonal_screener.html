@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='live_prices.js') }}?v=1.0"></script>
     <style>
         .screener-header {
             display: flex;
@@ -596,12 +597,8 @@
                 reconnection: true
             });
 
-            socket.on('market_data_update', function (data) {
-                if (data.signal === 'refresh') {
-                    console.log('Seasonal data refresh signal received');
-                    loadScreenerData(true); // Silent refresh
-                }
-            });
+            // Initialize centralized live price manager
+            LivePriceManager.init(socket);
 
             socket.on('connect', () => console.log('Socket connected'));
             socket.on('disconnect', () => console.log('Socket disconnected'));
@@ -736,7 +733,7 @@
 
                 newHtml += `
                     <tr>
-                        <td class="ticker"><a href="/stock/${stock.ticker}" class="ticker-link ${priceClass}">${stock.ticker} (₹${stock.price || '--'})</a></td>
+                        <td class="ticker"><a href="/stock/${stock.ticker}" class="ticker-link ticker-link-with-price ${priceClass}" data-live-ticker="${stock.ticker}">${stock.ticker} (₹${stock.price || '--'})</a></td>
                         <td>${stock.total_rallies}</td>
                         <td><span class="month-badge">${stock.best_month}</span></td>
                         <td>${stock.best_month_rallies} / 10</td>

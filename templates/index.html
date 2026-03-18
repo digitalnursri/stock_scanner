@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='live_prices.js') }}?v=1.0"></script>
     <style>
         .live-indicator {
             display: inline-flex;
@@ -468,13 +469,8 @@
                 updateLiveStatus(false);
             });
 
-            socket.on('market_data_update', function (data) {
-                console.log('Received real-time market data signal');
-                if (data.signal === 'refresh') {
-                    console.log('Data refresh signal received. Refreshing table via AJAX (Silent).');
-                    refreshTableData(true); // Silent for background updates
-                }
-            });
+            // Initialize zero-API live prices
+            LivePriceManager.init(socket);
 
             socket.on('market_data_progress', function (data) {
                 console.log('Market data progress:', data.message);

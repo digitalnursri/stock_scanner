@@ -48,9 +48,9 @@
             <tr data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
                 data-dma200="{{ stock['DMA 200'] }}" data-mcap="{{ stock['Market Cap'] }}"
                 data-signal="{{ stock.Signal }}" data-suggestion="{{ stock.Suggestion }}"
-                data-score="{{ stock.Score }}">
+                data-score="{{ stock.Score }}" data-ticker="{{ stock.Ticker }}">
                 <td class="ticker"><a href="/stock/{{ stock.Ticker }}">{{ stock.Ticker }}</a></td>
-                <td class="price {{ price_dir }}">₹{{ stock.Price }}</td>
+                <td class="price {{ price_dir }}" data-live-ticker="{{ stock.Ticker }}" data-flash-row="true">₹{{ stock.Price }}</td>
                 <td class="mcap">{{ stock['Market Cap'] }}</td>
                 <td class="rsi {{ rsi_class }}">{{ stock.RSI }}</td>
                 <td>{{ stock['DMA 50'] }}</td>
