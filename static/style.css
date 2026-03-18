@@ -24,6 +24,26 @@
     padding: 0;
 }
 
+@keyframes flashUpText {
+    0% { color: #22c55e; text-shadow: 0 0 8px rgba(34,197,94,0.6); }
+    100% { color: inherit; text-shadow: none; }
+}
+
+@keyframes flashDownText {
+    0% { color: #ef4444; text-shadow: 0 0 8px rgba(239,68,68,0.6); }
+    100% { color: inherit; text-shadow: none; }
+}
+
+.flash-up-text {
+    animation: flashUpText 1.5s ease-out;
+    font-weight: 700 !important;
+}
+
+.flash-down-text {
+    animation: flashDownText 1.5s ease-out;
+    font-weight: 700 !important;
+}
+
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);

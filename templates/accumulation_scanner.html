@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Accumulation Scanner | Stock Screener</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=2.1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -168,26 +168,24 @@
             color: #3b82f6;
         }
 
-        /* Rule Indicators */
-        .rule-indicator {
+        /* Rule Dots */
+        .rule-dot {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 22px;
-            height: 22px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            font-size: 0.7rem;
-            margin: 0 1px;
+            margin: 0 2px;
         }
 
-        .rule-indicator.pass {
-            background: rgba(16, 185, 129, 0.2);
-            color: #10b981;
+        .rule-dot.pass {
+            background: #10b981;
+            box-shadow: 0 0 5px rgba(16, 185, 129, 0.5);
         }
 
-        .rule-indicator.fail {
-            background: rgba(239, 68, 68, 0.15);
-            color: #ef4444;
+        .rule-dot.fail {
+            background: rgba(239, 68, 68, 0.3);
         }
 
         /* Score Bar */
@@ -755,7 +753,7 @@
             }
 
             try {
-                const url = `/api/accumulation-scanner?min_score=${minScore}&tag=${currentTagFilter}&search=${search}&page=${currentPage}&page_size=${pageSize}&sort_by=${sortColumn}&sort_direction=${sortDirection}`;
+                const url = `/api/accumulation-scanner?min_score=${minScore}&tag=${currentTagFilter}&search=${search}&page=${currentPage}&page_size=${pageSize}&sort_by=${sortColumn}&sort_direction=${sortDirection}&t=${Date.now()}`;
                 const response = await fetch(url);
                 const data = await response.json();
 

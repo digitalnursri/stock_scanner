@@ -265,6 +265,19 @@ def analyze_single_stock(ticker, df):
         else:
             tag = 'Neutral'
         
+        # Flatten details for frontend Rule Dots
+        rules = {
+            'Consolidation Phase': details['consolidation']['pass'],
+            'Low Volatility (ATR decreasing)': details['atr']['pass'],
+            'Volume Accumulation': details['volume']['pass'],
+            'Delivery %': details['delivery']['pass'],
+            'Support Strength': details['support']['pass'],
+            'Hidden Buying Signal': details['hidden_buying']['pass'],
+            'RSI Stability': details['rsi']['pass'],
+            'Not Overextended': details['overextended']['pass'],
+            'Breakout': details['breakout']['triggered']
+        }
+        
         return {
             'ticker': ticker,
             'tag': tag,
@@ -277,7 +290,8 @@ def analyze_single_stock(ticker, df):
             'rsi': round(float(current_rsi), 1),
             'dma50_status': 'Above' if (not np.isnan(dma_50[-1]) and current_price > dma_50[-1]) else 'Below',
             'hidden_buy_days': int(hidden_buy_days),
-            'details': details
+            'details': details,
+            'rules': rules
         }
     
     except Exception as e:
@@ -285,12 +299,15 @@ def analyze_single_stock(ticker, df):
         return None
 
 
-def scan_accumulation(tickers=None):
+import concurrent.futures
+
+def scan_accumulation(tickers=None, callback=None):
     """
-    Scan all given tickers for accumulation patterns.
+    Scan all given tickers for accumulation patterns in parallel.
     
     Args:
         tickers: List of tickers with .NS suffix. If None, fetches Nifty 250.
+        callback: Optional function called with (current, total, results_so_far)
     
     Returns:
         dict with 'stocks' list and metadata
@@ -301,51 +318,70 @@ def scan_accumulation(tickers=None):
     if not tickers:
         return {'error': 'Failed to fetch ticker list', 'stocks': []}
     
+    total_tickers = len(tickers)
     results = []
-    chunk_size = 20
     
-    for i in range(0, len(tickers), chunk_size):
-        chunk = tickers[i:i + chunk_size]
-        
-        # Log progress
-        with open('scanner_progress.txt', 'a') as f:
-            f.write(f"[{pd.Timestamp.now()}] Scanning chunk {i//chunk_size + 1}/{len(tickers)//chunk_size + 1}... ({len(chunk)} stocks)\n")
+    # Process in larger batches to maximize yfinance throughput
+    # but still allow progress updates
+    batch_size = 50
+    
+    for i in range(0, total_tickers, batch_size):
+        batch = tickers[i:min(i + batch_size, total_tickers)]
         
         try:
+            # log progress
+            msg = f"Scanning batch {i//batch_size + 1}... ({len(batch)} stocks)"
+            with open('scanner_progress.txt', 'a') as f:
+                f.write(f"[{pd.Timestamp.now()}] {msg}\n")
+            
             # Batch download 90 days of daily data
+            # Use a single download call for the entire batch
             data = yf.download(
-                chunk, period="90d", interval="1d",
-                group_by='ticker', progress=False, threads=True
+                batch, period="90d", interval="1d",
+                group_by='ticker', progress=False, threads=True, timeout=30
             )
             
-            for ticker in chunk:
-                try:
-                    clean_ticker = ticker.replace('.NS', '')
-                    
+            # Process results in parallel using ThreadPoolExecutor
+            # The calculation is relatively fast, but parallelizing ensures 
+            # we don't block the loop.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_ticker = {}
+                for ticker in batch:
                     # Extract ticker data from batch
-                    if isinstance(data.columns, pd.MultiIndex):
-                        if ticker in data.columns.get_level_values(0):
-                            hist = data[ticker].dropna(how='all')
+                    try:
+                        if isinstance(data.columns, pd.MultiIndex):
+                            if ticker in data.columns.get_level_values(0):
+                                hist = data[ticker].dropna(how='all')
+                            else:
+                                continue
                         else:
-                            continue
-                    else:
-                        hist = data.dropna(how='all')
-                    
-                    if hist.empty or len(hist) < 60:
-                        continue
-                    
-                    result = analyze_single_stock(clean_ticker, hist)
-                    if result is not None:
-                        results.append(result)
+                            hist = data.dropna(how='all')
                         
-                except Exception:
-                    continue
-                    
+                        if hist.empty or len(hist) < 60:
+                            continue
+                        
+                        clean_ticker = ticker.replace('.NS', '')
+                        future = executor.submit(analyze_single_stock, clean_ticker, hist)
+                        future_to_ticker[future] = clean_ticker
+                    except Exception:
+                        continue
+                
+                for future in concurrent.futures.as_completed(future_to_ticker):
+                    try:
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                    except Exception:
+                        continue
+            
+            if callback:
+                callback(min(i + batch_size, total_tickers), total_tickers, results)
+                
         except Exception as e:
             with open('scanner_progress.txt', 'a') as f:
-                f.write(f"[{pd.Timestamp.now()}] Error in batch download: {e}\n")
+                f.write(f"[{pd.Timestamp.now()}] Error in batch processing: {e}\n")
             continue
-    
+            
     with open('scanner_progress.txt', 'a') as f:
         f.write(f"[{pd.Timestamp.now()}] Scan complete. Matched {len(results)} stocks.\n")
     
@@ -355,7 +391,7 @@ def scan_accumulation(tickers=None):
     
     return {
         'stocks': results,
-        'total_scanned': len(tickers),
+        'total_scanned': total_tickers,
         'total_matched': len(results),
         'breakdown': {
             'breakout': sum(1 for r in results if r['tag'] == 'Breakout'),

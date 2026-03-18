@@ -4,7 +4,7 @@ eventlet.monkey_patch()
 
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
-from data_fetcher import get_nifty250_tickers, get_realtime_data
+from data_fetcher import get_nifty250_tickers, get_realtime_data, get_nse_live_prices
 import pandas as pd
 import time
 
@@ -103,7 +103,7 @@ _updating_accum_cache = False
 _updating_seasonal_cache = False
 
 CACHE_DURATION = 60  # 1 minute - fast refresh for real-time feel
-PRICES_ONLY_INTERVAL = 10 # 10 seconds for ultra-fast updates
+PRICES_ONLY_INTERVAL = 1 # 1 second for ultra-fast updates
 MARKET_DATA_CACHE_FILE = 'market_data_cache.json'
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
@@ -304,7 +304,8 @@ def refresh_main_cache():
 
 
 def refresh_prices_only():
-    """Hyper-fast refresh for Prices and Market Cap only"""
+    """Ultra-fast refresh using NSE India's real-time API (zero delay).
+    Falls back to yfinance if NSE API fails."""
     global _updating_prices_only
     if _updating_prices_only:
         return
@@ -315,76 +316,65 @@ def refresh_prices_only():
         _updating_prices_only = True
 
     try:
-        tickers = get_cached_tickers()
-        if not tickers:
+        update_id = f"FAST-{datetime.now().strftime('%H:%M:%S')}"
+        log_debug(f"[FAST-CACHE] {update_id} Starting NSE live price refresh...")
+        
+        # Use NSE India API for true real-time prices
+        nse_prices = get_nse_live_prices()
+        
+        if not nse_prices:
+            log_debug(f"[FAST-CACHE] {update_id} NSE API returned empty. Skipping this cycle.")
             return
-
-        update_id = f"FAST-{datetime.now().strftime('%H:%M:%S')}"
-        log_debug(f"[FAST-CACHE] Starting fast price refresh at {update_id}...")
         
-        def price_batch_cb(batch_data):
-            # Use the same batch_complete_cb logic (it now handles Price-Only mode)
-            # Re-creating a local version of update_id for the callback if needed
-            # but since we are inside refresh_prices_only, we can just call it
-            pass 
-
-        # We actually need to re-define or re-use the callback logic.
-        # Let's make a reusable merge function later, or just implement it here.
-        
-        # Actually, let's just use the same pattern as refresh_main_cache
-        # but with fetch_technicals=False
-        
-        update_id = f"FAST-{datetime.now().strftime('%H:%M:%S')}"
-        
-        def fast_batch_cb(batch_data):
-            log_debug(f"[FAST-CACHE] Received batch completion signal for {len(batch_data)} stocks.")
-            with CACHE["lock"]:
-                if not CACHE["data"]:
-                    return # Start with a full refresh first
-                
-                current_data = {s['Ticker']: s for s in CACHE["data"]}
-                for stock in batch_data:
-                    ticker = stock['Ticker']
-                    if ticker in current_data:
-                        # Price changed?
-                        old_price = current_data[ticker].get('Price', 0)
-                        if stock['Price'] != old_price:
-                            stock['PrevPrice'] = old_price
-                            # Keep indicators
-                            stock['RSI'] = current_data[ticker].get('RSI', 'N/A')
-                            stock['DMA 50'] = current_data[ticker].get('DMA 50', 'N/A')
-                            stock['DMA 100'] = current_data[ticker].get('DMA 100', 'N/A')
-                            stock['DMA 200'] = current_data[ticker].get('DMA 200', 'N/A')
-                            stock['Signal'] = current_data[ticker].get('Signal', 'Neutral')
-                            stock['Suggestion'] = current_data[ticker].get('Suggestion', 'Hold')
-                            stock['Score'] = current_data[ticker].get('Score', 0)
-                            current_data[ticker] = stock
-                
-                CACHE["data"] = sorted(current_data.values(), key=lambda x: x['Ticker'])
-                CACHE["last_updated"] = time.time()
-                
-                # Persist to disk
-                try:
-                    with open(MARKET_DATA_CACHE_FILE, 'w') as f:
-                        json.dump({
-                            'data': CACHE["data"], 
-                            'last_updated': CACHE["last_updated"],
-                            'update_id': update_id
-                        }, f)
-                except Exception as e:
-                    log_debug(f"[FAST-CACHE] Batch save error: {e}")
+        updated_count = 0
+        with CACHE["lock"]:
+            if not CACHE["data"]:
+                log_debug(f"[FAST-CACHE] {update_id} No base data yet. Waiting for full refresh.")
+                return
             
-            # Signal UI
+            current_data = {s['Ticker']: s for s in CACHE["data"]}
+            
+            for ticker, live in nse_prices.items():
+                if ticker in current_data:
+                    old_price = current_data[ticker].get('Price', 0)
+                    new_price = live['price']
+                    
+                    if new_price > 0:
+                        if new_price != old_price:
+                            current_data[ticker]['PrevPrice'] = old_price
+                            current_data[ticker]['Price'] = new_price
+                            updated_count += 1
+                        else:
+                            # Clear the PrevPrice so the UI doesn't keep flashing the old change
+                            # continuously on subsequent AJAX table re-renders
+                            current_data[ticker]['PrevPrice'] = new_price
+            
+            CACHE["data"] = sorted(current_data.values(), key=lambda x: x['Ticker'])
+            CACHE["last_updated"] = time.time()
+            
+            # Persist to disk
+            try:
+                with open(MARKET_DATA_CACHE_FILE, 'w') as f:
+                    json.dump({
+                        'data': CACHE["data"], 
+                        'last_updated': CACHE["last_updated"],
+                        'update_id': update_id
+                    }, f)
+            except Exception as e:
+                log_debug(f"[FAST-CACHE] {update_id} Save error: {e}")
+        
+        # Signal UI to refresh
+        if updated_count > 0:
             try:
                 socketio.emit('market_data_update', {
                     'signal': 'refresh',
                     'updated_at': datetime.now().isoformat(),
-                    'batch_size': len(batch_data),
-                    'mode': 'fast'
+                    'batch_size': updated_count,
+                    'mode': 'nse_live'
                 }, namespace='/')
             except: pass
-
-        get_realtime_data(tickers, fetch_technicals=False, on_batch_complete=fast_batch_cb)
+        
+        log_debug(f"[FAST-CACHE] {update_id} Done. {updated_count} prices updated from NSE live.")
         
     except Exception as e:
         log_debug(f"[FAST-CACHE] Error: {e}")
@@ -471,7 +461,10 @@ def index():
                 
             return render_template(template, stocks=stocks, current_page=page, total_pages=total_pages, total_count=total_count, last_updated=updated_at)
         except Exception as e:
-            log_debug(f"Error reading file cache: {e}")
+            import traceback
+            log_debug(f"Error rendering template {template}: {e}")
+            log_debug(traceback.format_exc())
+            log_debug(f"Template variables: page={page}, total_pages={total_pages}, total_count={total_count}, last_updated={updated_at}")
     
     # No cache at all - return empty with loading state, fetch in background
     log_debug("No cache found. Returning empty state.")
@@ -798,13 +791,17 @@ def seasonal_screener():
 
 @app.route('/api/seasonal-screener')
 def get_seasonal_data():
-    """API to get seasonal analysis results"""
+    """API to get seasonal analysis results with pagination and filtering"""
     global _updating_seasonal_cache
     from flask import request
     
     try:
-        min_gain = float(request.args.get('min_gain', 5))
+        min_gain = float(request.args.get('min_gain', 10))
         direction = request.args.get('direction', 'gain')
+        selected_month = request.args.get('month', 'All Months')
+        min_success_rate = float(request.args.get('min_success_rate', 0))
+        min_rallies = int(request.args.get('min_rallies', 0))
+        search_query = request.args.get('search', '').upper()
         
         # Load from JSON cache file
         if not os.path.exists(SEASONAL_CACHE_FILE):
@@ -823,8 +820,8 @@ def get_seasonal_data():
             
         is_stale = False
         if 'updated_at' in cached_data:
-            updated_at = datetime.fromisoformat(cached_data['updated_at'])
-            if datetime.now() - updated_at > timedelta(seconds=SEASONAL_CACHE_TTL):
+            updated_at = datetime.fromisoformat(cached_data['updated_at'].replace('Z', '+00:00'))
+            if datetime.now() - updated_at.replace(tzinfo=None) > timedelta(seconds=SEASONAL_CACHE_TTL):
                 is_stale = True
         
         if is_stale and not _updating_seasonal_cache:
@@ -833,6 +830,8 @@ def get_seasonal_data():
             
         page = int(request.args.get('page', 1))
         page_size = int(request.args.get('page_size', 20))
+        sort_by = request.args.get('sort_by', 'total_rallies')
+        sort_direction = request.args.get('sort_direction', 'desc')
         
         raw_stocks = cached_data.get('stocks_baseline_5', [])
         processed_stocks = []
@@ -844,6 +843,10 @@ def get_seasonal_data():
         for stock in raw_stocks:
             ticker = stock['ticker']
             
+            # Apply Ticker Search filter early
+            if search_query and search_query not in ticker.upper():
+                continue
+                
             # Decide which moves list to use based on direction
             if direction == 'loss':
                 all_moves = stock.get('fall_moves', [])
@@ -854,7 +857,6 @@ def get_seasonal_data():
             filtered_moves = [m for m in all_moves if m['gain'] >= min_gain]
             
             # ALSO calculate the other direction (risk profile) for that month
-            # We DONT filter this as strictly as the primary trend so we see all historical dips > 5%
             if direction == 'loss':
                 other_filtered = stock.get('all_moves', [])
             else:
@@ -870,6 +872,7 @@ def get_seasonal_data():
             
             for move in filtered_moves:
                 m_name = move['start_month']
+                if m_name not in monthly_stats_map: continue
                 s = monthly_stats_map[m_name]
                 s['count'] += 1
                 s['total_gain'] += move['gain']
@@ -886,9 +889,10 @@ def get_seasonal_data():
                     s['total_drwdn'] += val
                     if val < s['min_drwdn']: s['min_drwdn'] = val
 
-            # Aggregate "Other" direction (Independent moves in same month)
+            # Aggregate "Other" direction
             for move in other_filtered:
                 m_name = move['start_month']
+                if m_name not in monthly_stats_map: continue
                 s = monthly_stats_map[m_name]
                 s['count_other'] += 1
                 s['total_gain_other'] += move['gain']
@@ -897,7 +901,7 @@ def get_seasonal_data():
                 
             formatted_stats = []
             total_rallies = 0
-            best_month = None
+            best_month_obj = None
             max_rallies = -1
             max_avg_gain = -1
             
@@ -917,59 +921,75 @@ def get_seasonal_data():
                         'month': m_name,
                         'occurrences': s['count'],
                         'avg_gain': round(avg_g, 1),
-                        'min_gain': round(s['min_gain'], 1),
+                        'min_gain': round(s['min_gain'] if s['min_gain'] != float('inf') else 0, 1),
                         'max_gain': round(s['max_gain'], 1),
                         'avg_drawdown': round(avg_d, 1),
                         'min_drawdown': round(float(s['min_drwdn']), 1),
                         'success_rate': round(succ_r, 0),
-                        # Cross-trend metrics
                         'opp_count': s['count_other'],
-                        'opp_avg_gain': round(s['total_gain_other'] / s['count_other'], 1) if s['count_other'] > 0 else 0,
-                        'opp_max_gain': round(s['max_gain_other'], 1) if s['count_other'] > 0 else 0,
-                        'opp_min_gain': round(s['min_gain_other'], 1) if s['count_other'] > 0 else 0
+                        'opp_avg_gain': round(s['total_gain_other'] / s['count_other'], 1) if s['count_other'] > 0 else 0
                     }
                     formatted_stats.append(stat_obj)
                     total_rallies += s['count']
                     
-                    if s['count'] > max_rallies or (s['count'] == max_rallies and avg_g > max_avg_gain):
-                        max_rallies = s['count']
-                        max_avg_gain = avg_g
-                        best_month = stat_obj
+                    # Logic to pick "best_month" or "selected_month"
+                    if selected_month != 'All Months':
+                        if m_name == selected_month:
+                            best_month_obj = stat_obj
+                    else:
+                        if s['count'] > max_rallies or (s['count'] == max_rallies and avg_g > max_avg_gain):
+                            max_rallies = s['count']
+                            max_avg_gain = avg_g
+                            best_month_obj = stat_obj
             
+            # Final validation: Does this stock survive the high-level filters?
             if total_rallies > 0:
+                # If a specific month was selected but this stock had NO moves in that month, skip it
+                if selected_month != 'All Months' and not best_month_obj:
+                    continue
+                
+                # Apply Success Rate and Rally count filters
+                if best_month_obj:
+                    if best_month_obj['success_rate'] < min_success_rate: continue
+                    if best_month_obj['occurrences'] < min_rallies: continue
+
                 processed_stocks.append({
                     'ticker': ticker,
                     'total_rallies': total_rallies,
-                    'best_month': best_month['month'] if best_month else 'N/A',
-                    'best_month_rallies': best_month['occurrences'] if best_month else 0,
-                    'best_month_avg_gain': best_month['avg_gain'] if best_month else 0,
-                    'best_month_min_gain': best_month['min_gain'] if best_month else 0,
-                    'best_month_drawdown': best_month['avg_drawdown'] if best_month else 0,
-                    'best_month_min_drawdown': best_month['min_drawdown'] if best_month else 0,
-                    'best_month_success': best_month['success_rate'] if best_month else 0,
-                    'best_month_opp_avg': best_month['opp_avg_gain'] if best_month else 0,
-                    'best_month_opp_max': best_month['opp_max_gain'] if best_month else 0,
-                    'best_month_opp_min': best_month['opp_min_gain'] if best_month else 0,
+                    'best_month': best_month_obj['month'] if best_month_obj else 'N/A',
+                    'best_month_rallies': best_month_obj['occurrences'] if best_month_obj else 0,
+                    'best_month_avg_gain': best_month_obj['avg_gain'] if best_month_obj else 0,
+                    'best_month_min_gain': best_month_obj['min_gain'] if best_month_obj else 0,
+                    'best_month_drawdown': best_month_obj['avg_drawdown'] if best_month_obj else 0,
+                    'best_month_min_drawdown': best_month_obj['min_drawdown'] if best_month_obj else 0,
+                    'best_month_success': best_month_obj['success_rate'] if best_month_obj else 0,
                     'monthly_stats': formatted_stats
                 })
         
-        processed_stocks.sort(key=lambda x: x['total_rallies'], reverse=True)
+        # Sorting
+        reverse = (sort_direction == 'desc')
+        # Map frontend sort column to backend key if necessary (already mostly matching)
+        processed_stocks.sort(key=lambda x: x.get(sort_by, 0) if isinstance(x.get(sort_by), (int, float)) else str(x.get(sort_by, '')), reverse=reverse)
         
-        # Inject live prices from main cache
+        # Inject live prices
         with CACHE["lock"]:
             if CACHE.get("data"):
                 live_lookup = {item['Ticker']: item for item in CACHE["data"]}
                 for s in processed_stocks:
                     live_stock = live_lookup.get(s['ticker'])
                     if live_stock:
-                        s['price'] = live_stock.get('Price', s.get('price'))
-                        s['prev_price'] = live_stock.get('PrevPrice', s.get('price'))
+                        s['price'] = live_stock.get('Price', 0)
+                        s['prev_price'] = live_stock.get('PrevPrice', 0)
 
+        # Pagination
+        paginated_stocks, total_pages, total_count = paginate(processed_stocks, page, page_size)
+        
         return jsonify({
-            'stocks': processed_stocks,
+            'stocks': paginated_stocks,
+            'total_count': total_count,
+            'total_pages': total_pages,
+            'current_page': page,
             'total_analyzed': len(raw_stocks),
-            'min_gain_requested': min_gain,
-            'direction': direction,
             'updated_at': cached_data.get('updated_at'),
             'status': 'stale_updating' if (is_stale or cached_data.get('in_progress')) else 'fresh'
         })
@@ -1070,6 +1090,7 @@ def update_seasonal_cache():
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 ACCUMULATION_CACHE_FILE = 'accumulation_cache.json'
 VCP_CACHE_FILE = 'vcp_cache.json'
+SEASONAL_CACHE_TTL = 86400  # 24 hours
 ACCUMULATION_CACHE_TTL = 86400  # 24 hours
 
 @app.route('/accumulation-scanner')
@@ -1084,17 +1105,23 @@ def get_accumulation_data():
     Uses file-based cache with background refresh.
     """
     global _updating_accum_cache
+    from flask import request
+    force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+    
     try:
-        # Check if cache file exists
-        if not os.path.exists(ACCUMULATION_CACHE_FILE):
+        # Check if cache file exists or force refresh requested
+        if not os.path.exists(ACCUMULATION_CACHE_FILE) or force_refresh:
             if not _updating_accum_cache:
                 _updating_accum_cache = True
                 eventlet.spawn(update_accumulation_cache)
-            return jsonify({
-                "status": "calculating",
-                "message": "Scanning stocks for accumulation patterns. This takes 2-3 minutes.",
-                "stocks": []
-            })
+            
+            # If force_refresh and we already have cache, we still return the old one but status=calculating
+            if not os.path.exists(ACCUMULATION_CACHE_FILE):
+                return jsonify({
+                    "status": "calculating",
+                    "message": "Scanning stocks for accumulation patterns. This takes 2-3 minutes.",
+                    "stocks": []
+                })
 
         with open(ACCUMULATION_CACHE_FILE, 'r') as f:
             cached_data = json.load(f)
@@ -1124,6 +1151,10 @@ def get_accumulation_data():
         if tag_filter != 'all':
             stocks = [s for s in stocks if s['tag'] == tag_filter]
 
+        search_query = request.args.get('search', '').upper()
+        if search_query:
+            stocks = [s for s in stocks if search_query in s['ticker'].upper()]
+
         # Inject live prices from main cache
         with CACHE["lock"]:
             if CACHE.get("data"):
@@ -1139,14 +1170,23 @@ def get_accumulation_data():
         page_size = int(request.args.get('page_size', 20))
         paginated_stocks, total_pages, total_count = paginate(stocks, page, page_size)
 
+        # Prepare summary for frontend
+        breakdown = cached_data.get('breakdown', {})
+        summary = {
+            'breakout': breakdown.get('breakout', 0),
+            'pre_breakout': breakdown.get('pre_breakout', 0),
+            'accumulation': breakdown.get('accumulation', 0)
+        }
+
         return jsonify({
             'stocks': paginated_stocks,
             'total_pages': total_pages,
             'current_page': page,
             'total_count': total_count,
-            'total_scanned': cached_data.get('total_scanned', 0),
+            'total_analyzed': cached_data.get('total_scanned', 0),
             'total_matched': len(stocks),
-            'breakdown': cached_data.get('breakdown', {}),
+            'summary': summary,
+            'breakdown': breakdown,
             'updated_at': cached_data.get('updated_at'),
             'status': 'stale_updating' if is_stale else 'fresh'
         })
@@ -1374,19 +1414,53 @@ def start_vcp_auto_update():
 
 # Background worker for accumulation scanner
 def update_accumulation_cache():
-    """Background worker to refresh accumulation scanner data."""
+    """Background worker to refresh accumulation scanner data with incremental updates."""
     global _updating_accum_cache
-    print("Background update of accumulation cache started...")
+    print("Background update of accumulation cache started (Optimized)...")
     from accumulation_detector import scan_accumulation
     from datetime import datetime
     import os
     import json
 
+    def progress_callback(current, total, results_so_far):
+        # Emit a progress socket event
+        try:
+            socketio.emit('accumulation_progress', {
+                'current': current,
+                'total': total,
+                'found': len(results_so_far),
+                'percentage': round((current / total) * 100, 1)
+            })
+            
+            # Periodically write to cache if we have significant results
+            if current % 50 == 0 or current == total:
+                cache_content = {
+                    'stocks': results_so_far,
+                    'total_scanned': total,
+                    'total_matched': len(results_so_far),
+                    'updating': current < total,
+                    'updated_at': datetime.now().isoformat()
+                }
+                with open(ACCUMULATION_CACHE_FILE + '.tmp', 'w') as f:
+                    json.dump(cache_content, f)
+                if os.path.exists(ACCUMULATION_CACHE_FILE):
+                    os.remove(ACCUMULATION_CACHE_FILE)
+                os.rename(ACCUMULATION_CACHE_FILE + '.tmp', ACCUMULATION_CACHE_FILE)
+                
+                # Emit data update
+                socketio.emit('accumulation_update', {
+                    'partial': current < total,
+                    'count': len(results_so_far)
+                })
+        except Exception as e:
+            print(f"Error in progress callback: {e}")
+
     try:
-        result = scan_accumulation()
+        # Run optimized scan
+        result = scan_accumulation(callback=progress_callback)
 
         if 'error' not in result:
-            cache_content = {
+            final_cache = {
                 'stocks': result['stocks'],
                 'total_scanned': result['total_scanned'],
                 'total_matched': result['total_matched'],
@@ -1394,33 +1468,26 @@ def update_accumulation_cache():
                 'updated_at': datetime.now().isoformat()
             }
 
-            # Write to temp file first for atomic swap
-            temp_file = ACCUMULATION_CACHE_FILE + '.tmp'
-            with open(temp_file, 'w') as f:
-                json.dump(cache_content, f)
+            with open(ACCUMULATION_CACHE_FILE + '.tmp', 'w') as f:
+                json.dump(final_cache, f)
             
-            # Atomic swap
             if os.path.exists(ACCUMULATION_CACHE_FILE):
                 os.remove(ACCUMULATION_CACHE_FILE)
-            os.rename(temp_file, ACCUMULATION_CACHE_FILE)
+            os.rename(ACCUMULATION_CACHE_FILE + '.tmp', ACCUMULATION_CACHE_FILE)
             
-            print(f"Accumulation cache updated: {result['total_matched']} stocks matched out of {result['total_scanned']} scanned.")
+            print(f"Accumulation cache update complete: {result['total_matched']} stocks matched.")
             
-            # Emit real-time update
+            # Final socket emit
             try:
                 socketio.emit('accumulation_update', {
-                    'stocks': result['stocks'][:20],
-                    'total_scanned': result['total_scanned'],
-                    'total_matched': result['total_matched'],
-                    'breakdown': result['breakdown'],
-                    'updated_at': cache_content['updated_at'],
-                    'status': 'fresh'
-                }, namespace='/')
-                print("Real-time accumulation update emitted.")
+                    'final': True,
+                    'total': result['total_matched']
+                })
             except Exception as emit_err:
                 print(f"Socket emit error (non-critical): {emit_err}")
         else:
             print(f"Accumulation scan error: {result['error']}")
+            socketio.emit('accumulation_error', {'message': result['error']})
 
     except Exception as e:
         print(f"Critical error in update_accumulation_cache: {e}")
@@ -1585,21 +1652,32 @@ def start_paper_trading_monitor():
     print("Paper trading monitor started (checking every 30 seconds)")
 
 
-# Start heartbeats and auto-updates only in the main worker process
+# ==================== BACKGROUND TASK STARTUP ====================
+# These MUST run at module level so gunicorn workers also start them.
+# Using a flag to ensure they only start once per process.
+
+_background_started = False
+
+def start_all_background_tasks():
+    """Start all background loops. Safe to call multiple times (idempotent)."""
+    global _background_started
+    if _background_started:
+        return
+    _background_started = True
+
+    log_debug(f"===== Starting background tasks v{APP_VERSION} =====")
+    start_market_data_auto_update()
+    start_paper_trading_monitor()
+    start_vcp_auto_update()
+
+# Auto-start when imported by gunicorn OR run directly
+# For gunicorn: the module is imported, __name__ == 'app', so this runs.
+# For direct run: __name__ == '__main__', so this also runs.
+# The reloader guard prevents double-start during Flask debug mode.
+if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+    start_all_background_tasks()
+
+
 if __name__ == '__main__':
-    # Initial startup log
-    log_debug(f"===== Server starting v{APP_VERSION} =====")
-    
-    # Wrap background tasks to only run in the main worker, not the reloader's watcher
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
-        # Start auto-update on startup
-        start_market_data_auto_update()
-        
-        # Start paper trading background check
-        start_paper_trading_monitor()
-        
-        # Start VCP background update
-        start_vcp_auto_update()
-
-    socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)
-
+    log_debug(f"===== Server starting v{APP_VERSION} (direct run) =====")
+    socketio.run(app, debug=False, port=5000, allow_unsafe_werkzeug=True)

@@ -20,29 +20,47 @@
             {% for stock in stocks %}
             {% set price_dir = '' %}
             {% if stock.PrevPrice and stock.PrevPrice > 0 %}
-            {% if stock.Price > stock.PrevPrice %}
-            {% set price_dir = 'flash-up' %}
-            {% elif stock.Price < stock.PrevPrice %} {% set price_dir='flash-down' %} {% endif %} {% endif %} <tr
-                data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
+                {% if stock.Price > stock.PrevPrice %}
+                    {% set price_dir = 'flash-up' %}
+                {% elif stock.Price < stock.PrevPrice %}
+                    {% set price_dir = 'flash-down' %}
+                {% endif %}
+            {% endif %}
+            
+            {% set rsi_class = '' %}
+            {% if stock.RSI is number %}
+                {% if stock.RSI < 30 %}
+                    {% set rsi_class = 'rsi-low' %}
+                {% elif stock.RSI > 70 %}
+                    {% set rsi_class = 'rsi-high' %}
+                {% endif %}
+            {% endif %}
+
+            {% set score_class = '' %}
+            {% if stock.Score is number %}
+                {% if stock.Score > 0 %}
+                    {% set score_class = 'positive' %}
+                {% elif stock.Score < 0 %}
+                    {% set score_class = 'negative' %}
+                {% endif %}
+            {% endif %}
+
+            <tr data-price="{{ stock.Price }}" data-rsi="{{ stock.RSI }}" data-dma50="{{ stock['DMA 50'] }}"
                 data-dma200="{{ stock['DMA 200'] }}" data-mcap="{{ stock['Market Cap'] }}"
                 data-signal="{{ stock.Signal }}" data-suggestion="{{ stock.Suggestion }}"
                 data-score="{{ stock.Score }}">
                 <td class="ticker"><a href="/stock/{{ stock.Ticker }}">{{ stock.Ticker }}</a></td>
                 <td class="price {{ price_dir }}">₹{{ stock.Price }}</td>
                 <td class="mcap">{{ stock['Market Cap'] }}</td>
-                <td
-                    class="rsi {{ 'rsi-low' if stock.RSI is number and stock.RSI < 30 else 'rsi-high' if stock.RSI is number and stock.RSI > 70 else '' }}">
-                    {{ stock.RSI }}</td>
+                <td class="rsi {{ rsi_class }}">{{ stock.RSI }}</td>
                 <td>{{ stock['DMA 50'] }}</td>
                 <td>{{ stock['DMA 100'] }}</td>
                 <td>{{ stock['DMA 200'] }}</td>
                 <td><span class="signal-badge {{ stock.Signal|lower }}">{{ stock.Signal }}</span></td>
-                <td><span class="action-badge {{ stock.Suggestion|lower|replace(' ', '-') }}">{{
-                        stock.Suggestion }}</span></td>
-                <td class="score {{ 'positive' if stock.Score > 0 else 'negative' if stock.Score < 0 else '' }}">
-                    {{ stock.Score }}</td>
-                </tr>
-                {% endfor %}
+                <td><span class="action-badge {{ stock.Suggestion|lower|replace(' ', '-') }}">{{ stock.Suggestion }}</span></td>
+                <td class="score {{ score_class }}">{{ stock.Score }}</td>
+            </tr>
+            {% endfor %}
         </tbody>
     </table>
 </div>
@@ -72,7 +90,11 @@
 {% if last_updated %}
 <script>
     if (document.getElementById('lastUpdated')) {
-        document.getElementById('lastUpdated').textContent = "Last synchronized: {{ last_updated|default('', true) }}";
+        var ts = parseFloat("{{ last_updated|default('0', true) }}");
+        if (ts > 0) {
+            var d = new Date(ts * 1000);
+            document.getElementById('lastUpdated').textContent = "Last synchronized: " + d.toLocaleTimeString();
+        }
     }
 </script>
 {% endif %}

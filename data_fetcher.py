@@ -3,6 +3,119 @@ from nselib import capital_market
 import yfinance as yf
 import pandas as pd
 import concurrent.futures
+import requests
+import time as _time
+
+# ==================== NSE INDIA REAL-TIME PRICE API ====================
+# NSE India's own API gives TRUE real-time prices during market hours.
+# We use the equity-stockIndices endpoint which returns all stocks in an index.
+
+_nse_session = None
+_nse_session_created = 0
+NSE_SESSION_TTL = 300  # Recreate session every 5 minutes
+
+NSE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/",
+}
+
+# The indices that cover Nifty 250
+NSE_INDICES = [
+    "NIFTY 50",
+    "NIFTY NEXT 50",
+    "NIFTY MIDCAP 150",
+]
+
+
+def _get_nse_session():
+    """Get or create an NSE session with cookies."""
+    global _nse_session, _nse_session_created
+    
+    now = _time.time()
+    if _nse_session and (now - _nse_session_created < NSE_SESSION_TTL):
+        return _nse_session
+    
+    try:
+        _nse_session = requests.Session()
+        _nse_session.headers.update(NSE_HEADERS)
+        # Hit homepage to get session cookies
+        _nse_session.get("https://www.nseindia.com/", timeout=15)
+        _nse_session_created = now
+        print("[NSE-LIVE] Session successfully refreshed")
+        return _nse_session
+    except Exception as e:
+        print(f"[NSE-LIVE] Session creation failed: {e}")
+        return None
+
+
+def get_nse_live_prices():
+    """
+    Fetch TRUE real-time prices for all Nifty 250 stocks from NSE India API.
+    Returns a dict: { 'RELIANCE': {'price': 2500.5, 'change': 1.2, 'pchange': 0.05, ...}, ... }
+    """
+    global _nse_session_created
+    
+    session = _get_nse_session()
+    if not session:
+        print("[NSE-LIVE] No session available")
+        return {}
+    
+    all_prices = {}
+    
+    for index_name in NSE_INDICES:
+        try:
+            url = f"https://www.nseindia.com/api/equity-stockIndices?index={requests.utils.quote(index_name)}"
+            r = session.get(url, timeout=15)
+            
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                except Exception as je:
+                    print(f"[NSE-LIVE] JSON parse error for {index_name}: {je}")
+                    print(f"[NSE-LIVE] Raw response first 200 chars: {r.text[:200]}")
+                    # If JSON fails, it might be a block page, reset session
+                    _nse_session_created = 0
+                    continue
+
+                stocks = data.get("data", [])
+                
+                for stock in stocks:
+                    symbol = stock.get("symbol", "")
+                    if not symbol or symbol == index_name:
+                        continue
+                    
+                    try:
+                        ltp = stock.get("lastPrice", 0)
+                        if isinstance(ltp, str):
+                            ltp = float(ltp.replace(",", ""))
+                        
+                        all_prices[symbol] = {
+                            "price": round(float(ltp), 2),
+                            "change": round(float(stock.get("change", 0)), 2),
+                            "pchange": round(float(stock.get("pChange", 0)), 2),
+                            "open": float(stock.get("open", 0)),
+                            "high": float(stock.get("dayHigh", 0)),
+                            "low": float(stock.get("dayLow", 0)),
+                            "prev_close": float(stock.get("previousClose", 0)),
+                            "volume": stock.get("totalTradedVolume", 0),
+                        }
+                    except: continue # Skip individual stocks if data is weird
+                
+                print(f"[NSE-LIVE] {index_name}: {len(stocks)-1 if stocks else 0} stocks fetched")
+            elif r.status_code in (401, 403):
+                print(f"[NSE-LIVE] {index_name}: HTTP {r.status_code} (Blocked/Expired)")
+                _nse_session_created = 0
+            else:
+                print(f"[NSE-LIVE] {index_name}: HTTP {r.status_code}")
+                    
+        except Exception as e:
+            print(f"[NSE-LIVE] Error fetching {index_name}: {e}")
+        
+        _time.sleep(0.1) # Be gentle with NSE but allow fast updates
+    
+    return all_prices
 
 def get_nifty250_tickers():
     """

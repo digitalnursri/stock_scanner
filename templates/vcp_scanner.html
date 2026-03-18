@@ -672,7 +672,7 @@
         async function fetchResults(isSilent = false) {
             const loading = document.getElementById('loading');
             try {
-                const response = await fetch(`/api/vcp-results?page=${currentPage}&page_size=${pageSize}`);
+                const response = await fetch(`/api/vcp-results?page=${currentPage}&page_size=${pageSize}&t=${Date.now()}`);
                 const data = await response.json();
 
                 if (data.status === 'initializing') {
