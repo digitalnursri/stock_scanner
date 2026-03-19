@@ -7,3 +7,5 @@ flask-socketio
 prophet
 gunicorn
 eventlet
+playwright
+pytest-playwright

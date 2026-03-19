@@ -289,130 +289,6 @@
             color: #6366f1;
         }
 
-        /* Paper Trading Styles */
-        .paper-trading-panel {
-            background: var(--card-bg);
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .paper-trading-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .paper-trading-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--success);
-        }
-
-        .pnl-display {
-            display: flex;
-            gap: 2rem;
-            flex-wrap: wrap;
-        }
-
-        .pnl-item {
-            text-align: center;
-        }
-
-        .pnl-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-        }
-
-        .pnl-value.positive {
-            color: var(--success);
-        }
-
-        .pnl-value.negative {
-            color: var(--danger);
-        }
-
-        .pnl-label {
-            font-size: 0.8rem;
-            color: var(--text-dim);
-        }
-
-        .active-trades {
-            margin-top: 1rem;
-        }
-
-        .active-trades h4 {
-            margin-bottom: 0.5rem;
-            font-size: 0.9rem;
-            color: var(--text-dim);
-        }
-
-        .trade-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            margin: 2px;
-        }
-
-        .trade-tag.active {
-            background: rgba(34, 197, 94, 0.15);
-            color: var(--success);
-            border: 1px solid var(--success);
-        }
-
-        .trade-tag.closed-profit {
-            background: rgba(34, 197, 94, 0.1);
-            color: #10b981;
-        }
-
-        .trade-tag.closed-loss {
-            background: rgba(239, 68, 68, 0.1);
-            color: #ef4444;
-        }
-
-        .trade-notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 16px 20px;
-            border-radius: 12px;
-            color: white;
-            font-weight: 500;
-            z-index: 9999;
-            animation: slideInRight 0.3s ease;
-            max-width: 300px;
-        }
-
-        .trade-notification.new-trade {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-        }
-
-        .trade-notification.trade-closed {
-            background: linear-gradient(135deg, #10b981, #059669);
-        }
-
-        .trade-notification.trade-closed.loss {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-        }
-
-        @keyframes slideInRight {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-
         .mini-stats {
             display: flex;
             gap: 1rem;
@@ -425,6 +301,7 @@
             align-items: center;
             gap: 4px;
         }
+
     </style>
 </head>
 
@@ -441,41 +318,7 @@
             </div>
         </header>
 
-        <!-- Paper Trading Panel -->
-        <div class="paper-trading-panel">
-            <div class="paper-trading-header">
-                <div class="paper-trading-title">📊 Paper Trading (Auto-Execute)</div>
-                <div class="mini-stats">
-                    <span id="winRate">Win Rate: --</span>
-                    <span id="totalTrades">Total: --</span>
-                    <span id="activeTradeCount">Active: --</span>
-                </div>
-            </div>
-            <div class="pnl-display">
-                <div class="pnl-item">
-                    <div class="pnl-value" id="totalPnL">₹0</div>
-                    <div class="pnl-label">Total P&L</div>
-                </div>
-                <div class="pnl-item">
-                    <div class="pnl-value" id="avgPnL">₹0</div>
-                    <div class="pnl-label">Avg per Trade</div>
-                </div>
-                <div class="pnl-item">
-                    <div class="pnl-value" id="bestTrade">--</div>
-                    <div class="pnl-label">Best Trade</div>
-                </div>
-                <div class="pnl-item">
-                    <div class="pnl-value" id="worstTrade">--</div>
-                    <div class="pnl-label">Worst Trade</div>
-                </div>
-            </div>
-            <div class="active-trades">
-                <h4>Active Trades (Auto-managed)</h4>
-                <div id="activeTradesList">
-                    <span style="color: var(--text-dim); font-size: 0.85rem;">No active trades</span>
-                </div>
-            </div>
-        </div>
+
 
         <div class="stats-grid">
             <div class="stat-card">
@@ -820,106 +663,7 @@
             }
         }
 
-        // Paper Trading Functions
-        async function loadPaperTradingStats() {
-            try {
-                const response = await fetch('/api/paper-trading/stats?days=30');
-                const data = await response.json();
 
-                if (data.error) {
-                    console.error('Error loading paper trading stats:', data.error);
-                    return;
-                }
-
-                // Update P&L display
-                const totalPnL = data.total_pnl || 0;
-                const totalPnLEl = document.getElementById('totalPnL');
-                totalPnLEl.textContent = (totalPnL >= 0 ? '+' : '') + '₹' + totalPnL.toLocaleString();
-                totalPnLEl.className = 'pnl-value ' + (totalPnL >= 0 ? 'positive' : 'negative');
-
-                const avgPnL = data.avg_pnl_per_trade || 0;
-                const avgPnLEl = document.getElementById('avgPnL');
-                avgPnLEl.textContent = (avgPnL >= 0 ? '+' : '') + '₹' + avgPnL.toLocaleString();
-                avgPnLEl.className = 'pnl-value ' + (avgPnL >= 0 ? 'positive' : 'negative');
-
-                // Best/Worst trade
-                if (data.best_trade) {
-                    document.getElementById('bestTrade').textContent = data.best_trade.ticker + ' +' + data.best_trade.pnl_percent + '%';
-                } else {
-                    document.getElementById('bestTrade').textContent = '--';
-                }
-                if (data.worst_trade) {
-                    document.getElementById('worstTrade').textContent = data.worst_trade.ticker + ' ' + data.worst_trade.pnl_percent + '%';
-                } else {
-                    document.getElementById('worstTrade').textContent = '--';
-                }
-
-                // Mini stats
-                document.getElementById('winRate').textContent = 'Win Rate: ' + (data.win_rate || 0) + '%';
-                document.getElementById('totalTrades').textContent = 'Total: ' + (data.closed_trades || 0);
-                document.getElementById('activeTradeCount').textContent = 'Active: ' + (data.active_trades || 0);
-
-            } catch (err) {
-                console.error('Failed to load paper trading stats:', err);
-            }
-        }
-
-        async function loadActiveTrades() {
-            try {
-                const response = await fetch('/api/paper-trading/active-trades');
-                const data = await response.json();
-
-                const container = document.getElementById('activeTradesList');
-                document.getElementById('activeTradeCount').textContent = `Active: ${data.trades ? data.trades.length : 0}`;
-
-
-                if (!data.trades || data.trades.length === 0) {
-                    container.innerHTML = '<span style="color: var(--text-dim); font-size: 0.85rem;">No active trades</span>';
-                    return;
-                }
-
-                let html = '';
-                data.trades.forEach(trade => {
-                    html += `
-                        <span class="trade-tag active" title="Entry: ₹${trade.entry_price} | Target: ₹${trade.target_low}-${trade.target_high} | SL: ₹${trade.stop_loss}">
-                            <strong>${trade.ticker}</strong> ₹${trade.entry_price} → <span style="color: ${trade.current_pnl >= 0 ? 'var(--success)' : 'var(--danger)'}">₹${trade.current_price} (${trade.pnl_pct}%)</span>
-                        </span>
-                    `;
-                });
-                container.innerHTML = html;
-
-            } catch (err) {
-                console.error('Failed to load active trades:', err);
-            }
-        }
-
-        function showTradeNotification(type, data) {
-            const notif = document.createElement('div');
-            notif.className = 'trade-notification ' + type;
-
-            if (type === 'new-trade') {
-                notif.innerHTML = `
-                    <div style="font-weight: 700; margin-bottom: 4px;">🚀 New Trade Executed</div>
-                    <div style="font-size: 0.9rem;">${data.ticker} @ ₹${data.entry_price}</div>
-                    <div style="font-size: 0.8rem; opacity: 0.9;">Target: ${data.target} | SL: ₹${data.stop_loss}</div>
-                `;
-            } else if (type === 'trade-closed') {
-                const isProfit = data.pnl > 0;
-                notif.className += isProfit ? '' : ' loss';
-                notif.innerHTML = `
-                    <div style="font-weight: 700; margin-bottom: 4px;">${isProfit ? '✅' : '❌'} Trade ${isProfit ? 'Closed Profit' : 'Closed Loss'}</div>
-                    <div style="font-size: 0.9rem;">${data.ticker}: ${isProfit ? '+' : ''}₹${data.pnl}</div>
-                    <div style="font-size: 0.8rem; opacity: 0.9;">Reason: ${data.reason}</div>
-                `;
-            }
-
-            document.body.appendChild(notif);
-            setTimeout(() => {
-                notif.style.opacity = '0';
-                notif.style.transform = 'translateX(100%)';
-                setTimeout(() => notif.remove(), 300);
-            }, 5000);
-        }
 
         // Unified initSocket with signal-based refresh and paper trading events
         function initSocket() {
@@ -979,24 +723,7 @@
                 }
             }
 
-            // Paper trading events
-            socket.on('new_paper_trade', function (data) {
-                console.log('New paper trade:', data);
-                showTradeNotification('new-trade', data);
-                loadPaperTradingStats();
-                loadActiveTrades();
-            });
 
-            socket.on('trade_closed', function (data) {
-                console.log('Trade closed:', data);
-                showTradeNotification('trade-closed', data);
-                loadPaperTradingStats();
-                loadActiveTrades();
-            });
-
-            socket.on('active_trades_update', function (data) {
-                loadActiveTrades();
-            });
 
             socket.on('reconnect', function (attemptNumber) {
                 console.log('Reconnected after ' + attemptNumber + ' attempts');
@@ -1013,14 +740,7 @@
         window.onload = function () {
             initSocket();
             fetchResults();
-            loadPaperTradingStats();
-            loadActiveTrades();
 
-            // Refresh paper trading stats every 30 seconds
-            setInterval(() => {
-                loadPaperTradingStats();
-                loadActiveTrades();
-            }, 30000);
         };
     </script>
 </body>

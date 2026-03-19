@@ -57,11 +57,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 
-# Import paper trading module
-from paper_trading import (
-    execute_paper_trade, check_and_update_trades, get_active_trades,
-    get_trade_history, get_performance_stats, load_active_trades_from_disk
-)
+
 
 # Global cache
 CACHE = {
@@ -1698,157 +1694,6 @@ def update_accumulation_cache():
 
 # ==================== PAPER TRADING API ENDPOINTS ====================
 
-@app.route('/api/paper-trading/stats')
-def get_paper_trading_stats():
-    """Get paper trading performance statistics"""
-    try:
-        days = int(request.args.get('days', 30))
-        stats = get_performance_stats(days=days)
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/paper-trading/active-trades')
-def get_active_trades_api():
-    """Get all currently active paper trades"""
-    try:
-        trades = get_active_trades()
-        return jsonify({'trades': trades, 'count': len(trades)})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/paper-trading/trade-history')
-def get_trade_history_api():
-    """Get paper trading history"""
-    try:
-        limit = int(request.args.get('limit', 100))
-        days = int(request.args.get('days', 30))
-        trades = get_trade_history(limit=limit, days=days)
-        return jsonify({'trades': trades, 'count': len(trades)})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/paper-trading/execute', methods=['POST'])
-def execute_manual_trade():
-    """Manually execute a paper trade"""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-        
-        trade = execute_paper_trade(data)
-        if trade:
-            return jsonify({'success': True, 'trade': trade})
-        else:
-            return jsonify({'success': False, 'message': 'Trade not executed (may already have active trade for this ticker)'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-def auto_execute_vcp_trades(vcp_results):
-    """
-    Automatically execute paper trades on VCP signals
-    Called after VCP cache update
-    """
-    executed = []
-    
-    for stock in vcp_results[:5]:  # Only top 5 signals
-        # Only trade on high probability setups
-        if stock.get('score', 0) >= 5:
-            trade = execute_paper_trade(stock)
-            if trade:
-                executed.append(trade)
-                # Emit real-time notification
-                try:
-                    socketio.emit('new_paper_trade', {
-                        'ticker': trade['ticker'],
-                        'entry_price': trade['entry_price'],
-                        'target': f"₹{trade['target_low']}-₹{trade['target_high']}",
-                        'stop_loss': trade['stop_loss']
-                    }, namespace='/')
-                except:
-                    pass
-    
-    if executed:
-        print(f"[AUTO TRADE] Executed {len(executed)} paper trades from VCP signals")
-    
-    return executed
-
-
-def update_paper_trades_with_market_data():
-    """
-    Check active trades against current market prices
-    Run this periodically to update P&L and close trades
-    """
-    try:
-        # Get current prices for active trades
-        active_trades = get_active_trades()
-        if not active_trades:
-            return
-        
-        tickers = [t['ticker'] for t in active_trades]
-        ticker_symbols = [f"{t}.NS" for t in tickers]
-        
-        import yfinance as yf
-        data = yf.download(ticker_symbols, period="1d", interval="1m", progress=False)
-        
-        current_prices = {}
-        for ticker in tickers:
-            try:
-                full_ticker = f"{ticker}.NS"
-                if isinstance(data.columns, pd.MultiIndex):
-                    if full_ticker in data.columns.levels[0]:
-                        price = data[full_ticker]['Close'].iloc[-1]
-                        current_prices[ticker] = float(price)
-                else:
-                    price = data['Close'].iloc[-1]
-                    current_prices[ticker] = float(price)
-            except:
-                continue
-        
-        # Check and update trades
-        closed_trades = check_and_update_trades(current_prices)
-        
-        # Emit updates for closed trades
-        for closed in closed_trades:
-            try:
-                socketio.emit('trade_closed', {
-                    'ticker': closed['ticker'],
-                    'pnl': closed['pnl'],
-                    'reason': closed['reason']
-                }, namespace='/')
-            except:
-                pass
-        
-        # Emit active trades update
-        try:
-            active = get_active_trades()
-            socketio.emit('active_trades_update', {
-                'trades': active,
-                'count': len(active)
-            }, namespace='/')
-        except:
-            pass
-        
-    except Exception as e:
-        print(f"Error updating paper trades: {e}")
-
-
-def start_paper_trading_monitor():
-    """Start background greenlet to monitor paper trades"""
-    def monitor_loop():
-        while True:
-            try:
-                eventlet.sleep(30)  # Check every 30 seconds
-                update_paper_trades_with_market_data()
-            except Exception as e:
-                print(f"Paper trading monitor error: {e}")
-    
-    eventlet.spawn(monitor_loop)
-    print("Paper trading monitor started (checking every 30 seconds)")
 
 
 # ==================== BACKGROUND TASK STARTUP ====================
@@ -1866,7 +1711,7 @@ def start_all_background_tasks():
 
     log_debug(f"===== Starting background tasks v{APP_VERSION} =====")
     start_market_data_auto_update()
-    start_paper_trading_monitor()
+
     start_vcp_auto_update()
 
 # Auto-start when imported by gunicorn OR run directly

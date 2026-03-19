@@ -1,5 +1,7 @@
 venv/
 venv_win/
+venv_app/
+venv_test/
 __pycache__/
 *.pyc
 .DS_Store
