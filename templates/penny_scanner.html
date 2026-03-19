@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penny Stock Scanner | India (< ₹50)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='live_prices.js') }}?v=1.0"></script>
+    <style>
+        /* Slider Styles */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: #334155;
+            border-radius: 5px;
+            outline: none;
+            border: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid white;
+        }
+
+        .risk-params {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .num-positive { color: var(--success); font-weight: 600; }
+        .num-negative { color: var(--danger); font-weight: 600; }
+
+        .pass { color: var(--success); font-weight: 700; }
+        .fail { color: var(--warning); font-weight: 700; }
+
+        .criteria-list {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .criteria-item {
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 6px;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #818cf8;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #fbbf24, #f59e0b);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 1.25rem;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            text-align: center;
+        }
+
+        .stat-label {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            margin-bottom: 0.4rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .scanner-container {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid #334155;
+            overflow: hidden;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        .filter-bar {
+            padding: 1.5rem;
+            background: rgba(15, 23, 42, 0.5);
+            border-bottom: 1px solid #334155;
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .filter-group label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-dim);
+        }
+
+        select, input {
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: white;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        select:focus, input:focus {
+            border-color: var(--primary);
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            position: relative;
+            min-height: 400px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            background: rgba(15, 23, 42, 0.8);
+            padding: 1rem;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #334155;
+            font-size: 0.9rem;
+            vertical-align: middle;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .ticker-cell {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ticker-name {
+            font-weight: 700;
+            color: var(--accent);
+            cursor: pointer;
+        }
+
+        .ticker-name:hover {
+            text-decoration: underline;
+        }
+
+        .tag-pill {
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .tag-accumulation { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .tag-breakout { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .tag-retest { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+
+        .confidence-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .confidence-bar {
+            height: 6px;
+            width: 60px;
+            background: #334155;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: var(--success);
+        }
+
+        .num-positive { color: var(--success); font-weight: 600; }
+        .num-negative { color: var(--danger); font-weight: 600; }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: var(--card-bg);
+            width: 90%;
+            max-width: 700px;
+            border-radius: 16px;
+            border: 1px solid #334155;
+            padding: 2rem;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 1rem;
+        }
+
+        .close-btn {
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-dim);
+        }
+
+        .criteria-list {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .criteria-item {
+            background: rgba(15, 23, 42, 0.3);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+
+        .pass { color: var(--success); }
+        .fail { color: var(--danger); }
+
+        /* Progress Overlay */
+        .overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.9);
+            z-index: 2000;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .progress-container {
+            width: 300px;
+            height: 10px;
+            background: #334155;
+            border-radius: 5px;
+            margin: 1.5rem 0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-secondary { background: #334155; color: white; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            padding: 1.5rem;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .page-btn {
+            background: #334155;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .page-info { font-size: 0.9rem; color: var(--text-dim); }
+
+        .risk-params {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <div class="logo">💎 PennyStock Scanner India</div>
+                <div style="font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;">Low Risk, High Probability Penny Trades (< ₹50)</div>
+            </div>
+            <div class="header-actions">
+                <div id="liveStatus" style="font-size: 0.75rem;">
+                    <span style="color: var(--text-dim)">●</span> Backend Link
+                </div>
+                <button class="btn btn-secondary" onclick="manualRefresh()">
+                    <span>🔄</span> Refresh Scan
+                </button>
+                <a href="/" class="btn btn-primary">
+                    <span>🏠</span> Dashboard
+                </a>
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Analyzed</div>
+                <div class="stat-value" id="statsScanned">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Matches Found</div>
+                <div class="stat-value" id="statsMatched">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Breakouts</div>
+                <div class="stat-value" id="statsBreakouts" style="color: var(--success)">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Accumulation</div>
+                <div class="stat-value" id="statsAccum" style="color: #60a5fa">--</div>
+            </div>
+        </div>
+
+        <div class="scanner-container">
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <label>Search Ticker</label>
+                    <input type="text" id="filterSearch" placeholder="RELIANCE..." oninput="filterLocalData()">
+                </div>
+                <div class="filter-group">
+                    <label>Min M.Cap (Cr): <span id="mcapVal">0</span></label>
+                    <input type="range" id="filterMcap" min="0" max="5000" step="100" value="0" oninput="updateFilterLabels()">
+                </div>
+                <div class="filter-group">
+                    <label>Max D/E: <span id="deVal">2.0</span></label>
+                    <input type="range" id="filterDE" min="0" max="2" step="0.1" value="2.0" oninput="updateFilterLabels()">
+                </div>
+                <div class="filter-group">
+                    <label>Min Promoter: <span id="promoterVal">0</span>%</label>
+                    <input type="range" id="filterPromoter" min="0" max="100" step="5" value="0" oninput="updateFilterLabels()">
+                </div>
+                <div class="filter-group">
+                    <label>Logic Tag</label>
+                    <select id="filterTag" onchange="filterLocalData()">
+                        <option value="all">All Tags</option>
+                        <option value="Breakout">🚀 Breakout</option>
+                        <option value="Accumulation">🔍 Accumulation</option>
+                        <option value="Retest">🔄 Retest</option>
+                    </select>
+                </div>
+                <div style="margin-left: auto; display: flex; align-items: center; gap: 10px;">
+                    <button class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="resetFilters()">Reset</button>
+                    <span style="font-size: 0.8rem; color: var(--text-dim)" id="lastUpdated">Updated: --</span>
+                </div>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="pennyTable">
+                    <thead>
+                        <tr>
+                            <th>Stock</th>
+                            <th>Tag</th>
+                            <th>Price</th>
+                            <th>Confidence</th>
+                            <th>Fundamentals</th>
+                            <th>Debt Health</th>
+                            <th>Strategy Path</th>
+                            <th>Action Zone</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pennyBody">
+                        <!-- JS handles injection -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination" style="display: none;"> <!-- Hidden as we show all for frontend filtering -->
+                <button class="page-btn" id="prevBtn" onclick="changePage(-1)">Prev</button>
+                <span class="page-info" id="pageInfo">Page 1 of 1</span>
+                <button class="page-btn" id="nextBtn" onclick="changePage(1)">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan Progress Overlay -->
+    <div id="scanOverlay" class="overlay">
+        <h2 style="color: var(--primary)">Scanning Indian Market</h2>
+        <p style="color: var(--text-dim)">Applying Debt, Liquidity & Accumulation Filters...</p>
+        <div class="progress-container">
+            <div id="scanProgress" class="progress-fill"></div>
+        </div>
+        <div id="scanStatus" style="font-size: 1.1rem; font-weight: 500;">0 / 0 Stocks</div>
+        <p style="margin-top: 10px; color: var(--accent)" id="scanHits">Matches Found: 0</p>
+    </div>
+
+    <!-- Detail Modal -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Stock Details</h2>
+                <span class="close-btn" onclick="closeModal()">&times;</span>
+            </div>
+            <div id="modalBody">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allStocks = [];
+        let filteredStocks = [];
+
+        async function fetchData() {
+            // We fetch all data once and let frontend handle filtering/sorting
+            const url = `/api/penny-scanner?page=1&page_size=500&t=${Date.now()}`;
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (data.status === 'calculating') {
+                    document.getElementById('scanOverlay').style.display = 'flex';
+                    return;
+                }
+
+                document.getElementById('scanOverlay').style.display = 'none';
+                allStocks = data.stocks;
+                filterLocalData(); // Initial filter & render
+                
+                document.getElementById('statsScanned').textContent = data.total_analyzed || 0;
+                document.getElementById('lastUpdated').textContent = `Updated: ${new Date(data.updated_at).toLocaleTimeString()}`;
+            } catch (e) {
+                console.error("Fetch error:", e);
+            }
+        }
+
+        function updateFilterLabels() {
+            document.getElementById('mcapVal').textContent = document.getElementById('filterMcap').value;
+            document.getElementById('deVal').textContent = document.getElementById('filterDE').value;
+            document.getElementById('promoterVal').textContent = document.getElementById('filterPromoter').value;
+            filterLocalData();
+        }
+
+        function resetFilters() {
+            document.getElementById('filterSearch').value = '';
+            document.getElementById('filterMcap').value = 0;
+            document.getElementById('filterDE').value = 2.0;
+            document.getElementById('filterPromoter').value = 0;
+            document.getElementById('filterTag').value = 'all';
+            updateFilterLabels();
+        }
+
+        function filterLocalData() {
+            const search = document.getElementById('filterSearch').value.toUpperCase();
+            const minMcap = parseFloat(document.getElementById('filterMcap').value);
+            const maxDE = parseFloat(document.getElementById('filterDE').value);
+            const minPromoter = parseFloat(document.getElementById('filterPromoter').value);
+            const tag = document.getElementById('filterTag').value;
+
+            filteredStocks = allStocks.filter(s => {
+                // Search
+                if (search && !s.ticker.toUpperCase().includes(search)) return false;
+                
+                // M.Cap
+                const mcap = s.mcap_cr || 0;
+                if (mcap < minMcap && minMcap > 0) return false;
+                
+                // D/E
+                const de = s.d_e || 0;
+                if (de > maxDE) return false;
+                
+                // Promoter
+                const prom = s.promoter_holding || 0;
+                if (prom < minPromoter) return false;
+                
+                // Tag
+                if (tag !== 'all' && s.tag !== tag) return false;
+                
+                return true;
+            });
+
+            renderTable(filteredStocks);
+            updateStatsBrief(filteredStocks);
+        }
+
+        function renderTable(stocks) {
+            const body = document.getElementById('pennyBody');
+            body.innerHTML = '';
+
+            if (stocks.length === 0) {
+                body.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 3rem; color:var(--text-dim)">No stocks matching current filters found. Try loosening your criteria!</td></tr>';
+                return;
+            }
+
+            stocks.forEach(s => {
+                const tr = document.createElement('tr');
+                const tagClass = `tag-${s.tag.toLowerCase()}`;
+                const confPercent = (s.confidence / 10) * 100;
+                
+                tr.innerHTML = `
+                    <td>
+                        <div class="ticker-cell">
+                            <span class="ticker-name" onclick="showDetails('${s.ticker}')">${s.ticker}</span>
+                            <span style="font-size:0.75rem; color:var(--text-dim)">₹${s.mcap_cr || 0} Cr</span>
+                        </div>
+                    </td>
+                    <td><span class="tag-pill ${tagClass}">${s.tag}</span></td>
+                    <td data-live-ticker="${s.ticker}">₹${s.price.toFixed(2)}</td>
+                    <td>
+                        <div class="confidence-box">
+                            <div class="confidence-bar"><div class="confidence-fill" style="width:${confPercent}%"></div></div>
+                            <span>${s.confidence}/10</span>
+                        </div>
+                    </td>
+                    <td>
+                        <div style="font-size:0.85rem">PH: ${s.promoter_holding}%</div>
+                        <div style="font-size:0.75rem; color:var(--text-dim)">Fund: ${s.fund_pass ? '✅' : '⚠️'}</div>
+                    </td>
+                    <td style="font-size:0.85rem">
+                        <div class="${(s.d_e || 0) < 0.5 ? 'num-positive' : 'num-negative'}">D/E: ${(s.d_e || 0).toFixed(2)}</div>
+                        <div class="${(s.icr || 0) > 2 ? 'num-positive' : 'num-negative'}">ICR: ${(s.icr || 0).toFixed(1)}</div>
+                    </td>
+                    <td>
+                        <div style="font-weight:600">${s.breakout_level > 0 ? 'Break: ₹' + s.breakout_level.toFixed(2) : 'Consolidating'}</div>
+                        <div style="font-size:0.75rem; color:var(--text-dim)">Vol: ${s.avg_vol ? (s.avg_vol/100000).toFixed(1) + 'L' : 'N/A'}</div>
+                    </td>
+                    <td>
+                        <div style="color:var(--success); font-weight:700">🛒 ${s.entry_zone}</div>
+                        <div class="risk-params">
+                            🎯 ${s.target} | 🛡️ SL: ${s.stop_loss}
+                        </div>
+                    </td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        function updateStatsBrief(stocks) {
+            document.getElementById('statsMatched').textContent = stocks.length;
+            document.getElementById('statsBreakouts').textContent = stocks.filter(s => s.tag === 'Breakout').length;
+            document.getElementById('statsAccum').textContent = stocks.filter(s => s.tag === 'Accumulation').length;
+        }
+
+        function showDetails(ticker) {
+            const s = allStocks.find(x => x.ticker === ticker);
+            if (!s) return;
+            
+            const modalBody = document.getElementById('modalBody');
+            document.getElementById('modalTitle').textContent = `${ticker} Analysis Details`;
+            
+            modalBody.innerHTML = `
+                <div class="criteria-list">
+                    <div class="criteria-item">
+                        <strong>Fundamental Pass:</strong> <span class="${s.fund_pass ? 'pass' : 'fail'}">${s.fund_pass ? 'PASSED' : 'LOW CRITERIA'}</span>
+                    </div>
+                    <div class="criteria-item">
+                        <strong>Debt Health:</strong> <span class="${s.debt_pass ? 'pass' : 'fail'}">${s.debt_pass ? 'HEALTHY' : 'HIGH DEBT'}</span>
+                    </div>
+                    <div class="criteria-item">
+                        <strong>Avg Volume (50d):</strong> <span>${(s.avg_vol/1000).toFixed(0)}K</span>
+                    </div>
+                    <div class="criteria-item">
+                        <strong>Liquidity Pass:</strong> <span class="${s.liq_pass ? 'pass' : 'fail'}">${s.liq_pass ? 'GOOD' : 'THIN'}</span>
+                    </div>
+                </div>
+                <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px;">
+                    <strong>Scanner Observations:</strong><br>
+                    <span style="color: var(--text-dim); font-size: 0.9rem;">${s.reasons || "Meets baseline criteria for penny scan."}</span>
+                </div>
+            `;
+            document.getElementById('detailModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+
+        // Socket.IO Integration
+        const socket = io();
+        socket.on('penny_progress', (data) => {
+            document.getElementById('scanOverlay').style.display = 'flex';
+            const pct = (data.current / data.total) * 100;
+            document.getElementById('scanProgress').style.width = pct + '%';
+            document.getElementById('scanStatus').textContent = `${data.current} / ${data.total} Stocks Checked`;
+            document.getElementById('scanHits').textContent = `Matches Found: ${data.found}`;
+        });
+
+        socket.on('penny_update', () => {
+            fetchData();
+        });
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailModal');
+            if (event.target == modal) closeModal();
+        }
+
+        // Initialize Live Prices
+        LivePriceManager.init(socket);
+
+        window.onload = fetchData;
+    </script>
+</body>
+</html>

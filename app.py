@@ -101,10 +101,12 @@ _updating_prices_only = False
 _updating_vcp_cache = False
 _updating_accum_cache = False
 _updating_seasonal_cache = False
+_updating_penny_cache = False
 
 CACHE_DURATION = 60  # 1 minute - fast refresh for real-time feel
 PRICES_ONLY_INTERVAL = 1 # 1 second for ultra-fast updates
 MARKET_DATA_CACHE_FILE = 'market_data_cache.json'
+PENNY_CACHE_FILE = 'penny_scanner_cache.json'
 SEASONAL_CACHE_FILE = 'seasonal_cache_v7.json'
 SEASONAL_CACHE_TTL = 86400  # 24 hours
 ANALYTICS_CACHE_DIR = 'analytics_cache'
@@ -1258,6 +1260,140 @@ def get_accumulation_data():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.route('/penny-scanner')
+def penny_scanner():
+    """Penny Stock Scanner page"""
+    return render_template('penny_scanner.html')
+
+@app.route('/api/penny-scanner')
+def get_penny_data():
+    """API to get penny stock scan results."""
+    global _updating_penny_cache
+    import eventlet
+    from flask import request, jsonify
+    import os, json
+    
+    try:
+        if not os.path.exists(PENNY_CACHE_FILE):
+            if not _updating_penny_cache:
+                _updating_penny_cache = True
+                socketio.start_background_task(update_penny_cache)
+            
+            return jsonify({
+                "status": "calculating",
+                "message": "Scanning for penny stocks. This takes 1-2 minutes.",
+                "stocks": []
+            })
+
+        with open(PENNY_CACHE_FILE, 'r') as f:
+            cached_data = json.load(f)
+
+        is_stale = False
+        if 'updated_at' in cached_data:
+            from datetime import datetime
+            updated_at = datetime.fromisoformat(cached_data['updated_at'])
+            if (datetime.now() - updated_at).total_seconds() > 86400: # 24 hrs
+                is_stale = True
+
+        if is_stale and not _updating_penny_cache:
+            _updating_penny_cache = True
+            socketio.start_background_task(update_penny_cache)
+
+        stocks = cached_data.get('stocks', [])
+        
+        # Initial backend filters (optional, can be removed if frontend handles everything)
+        min_confidence = int(request.args.get('min_confidence', 0))
+        tag_filter = request.args.get('tag', 'all')
+        search_query = request.args.get('search', '').upper()
+        
+        if min_confidence > 0:
+            stocks = [s for s in stocks if s['confidence'] >= min_confidence]
+        if tag_filter != 'all':
+            stocks = [s for s in stocks if s.get('tag', '').lower() == tag_filter.lower()]
+        if search_query:
+            stocks = [s for s in stocks if search_query in s['ticker'].upper()]
+
+        # Inject live prices
+        with CACHE["lock"]:
+            if CACHE.get("data"):
+                live_lookup = {item['Ticker']: item for item in CACHE["data"]}
+                for s in stocks:
+                    live_stock = live_lookup.get(s['ticker'])
+                    if live_stock:
+                        s['price'] = live_stock.get('Price', s.get('price'))
+
+        page = int(request.args.get('page', 1))
+        # Large page size to send all data for frontend filtering
+        page_size = int(request.args.get('page_size', 500)) 
+        paginated_stocks, total_pages, total_count = paginate(stocks, page, page_size)
+
+        breakdown = cached_data.get('breakdown', {})
+        return jsonify({
+            'stocks': paginated_stocks,
+            'total_pages': total_pages,
+            'current_page': page,
+            'total_count': total_count,
+            'total_analyzed': cached_data.get('total_scanned', 0),
+            'total_matched': len(stocks),
+            'breakdown': breakdown,
+            'updated_at': cached_data.get('updated_at'),
+            'status': 'stale_updating' if is_stale else 'fresh'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+def update_penny_cache():
+    """Background worker to refresh penny scanner data."""
+    global _updating_penny_cache
+    print("[DEBUG] update_penny_cache: Worker entry point reached", flush=True)
+    from penny_scanner import scan_penny_stocks
+    from datetime import datetime
+    import os
+    import json
+    
+    print("[DEBUG] update_penny_cache: Imports successful", flush=True)
+
+    def progress_callback(current, total, results_so_far):
+        try:
+            print(f"[DEBUG] progress_callback: emitting {current}/{total}", flush=True)
+            socketio.emit('penny_progress', {
+                'current': current,
+                'total': total,
+                'found': len(results_so_far)
+            }, namespace='/')
+            # Yield to eventlet
+            eventlet.sleep(0.01)
+        except Exception as e:
+            print(f"[DEBUG] progress_callback error: {e}", flush=True)
+
+    try:
+        print("[DEBUG] update_penny_cache: calling scan_penny_stocks", flush=True)
+        result = scan_penny_stocks(callback=progress_callback)
+        print(f"[DEBUG] update_penny_cache: scan_penny_stocks returned {len(result.get('stocks', []))} stocks", flush=True)
+        if 'error' not in result:
+            final_cache = {
+                'stocks': result['stocks'],
+                'total_scanned': result['total_scanned'],
+                'total_matched': result['total_matched'],
+                'breakdown': result['breakdowns'],
+                'updated_at': datetime.now().isoformat()
+            }
+            with open(PENNY_CACHE_FILE + '.tmp', 'w') as f:
+                json.dump(final_cache, f)
+            if os.path.exists(PENNY_CACHE_FILE):
+                os.remove(PENNY_CACHE_FILE)
+            os.rename(PENNY_CACHE_FILE + '.tmp', PENNY_CACHE_FILE)
+            print(f"Penny stock cache update complete: {result['total_matched']} matched.")
+            try:
+                socketio.emit('penny_update', {'final': True}, namespace='/')
+            except: pass
+    except Exception as e:
+        print(f"Error in update_penny_cache: {e}")
+    finally:
+        _updating_penny_cache = False
 
 @app.route('/vcp-scanner')
 def vcp_scanner():
