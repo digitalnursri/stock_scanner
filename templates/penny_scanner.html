@@ -520,6 +520,21 @@
         let allStocks = [];
         let filteredStocks = [];
 
+        async function manualRefresh() {
+            try {
+                const res = await fetch('/api/penny-scanner/manual-refresh', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'started' || data.status === 'already_running') {
+                    document.getElementById('scanOverlay').style.display = 'flex';
+                } else {
+                    alert("Refresh failed: " + (data.message || "Unknown error"));
+                }
+            } catch (e) {
+                console.error("Refresh error:", e);
+                alert("Connection error while trying to refresh.");
+            }
+        }
+
         async function fetchData() {
             // We fetch all data once and let frontend handle filtering/sorting
             const url = `/api/penny-scanner?page=1&page_size=500&t=${Date.now()}`;

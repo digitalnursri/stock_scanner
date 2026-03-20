@@ -31,7 +31,12 @@ def get_penny_universe():
             if not smallcaps.empty:
                 tickers.extend([f"{t}.NS" for t in smallcaps['Symbol'].tolist()])
         except:
-            pass
+            try:
+                nifty500 = capital_market.nifty500_equity_list()
+                if not nifty500.empty:
+                    tickers.extend([f"{t}.NS" for t in nifty500['Symbol'].tolist()])
+            except:
+                pass
             
         # Standard fallback penny stocks that are popular
         fallbacks = ["IDEA.NS", "SUZLON.NS", "YESBANK.NS", "ZOMATO.NS", "SOUTHBANK.NS", 
@@ -53,12 +58,13 @@ def calculate_atr(high, low, close, period=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
-def analyze_single_penny_stock(ticker, df):
+def analyze_single_penny_stock(ticker, df, info=None):
     """
     Analyze a single stock for penny stock criteria.
     Args:
         ticker: Stock ticker symbol (without .NS)
         df: DataFrame with OHLCV data
+        info: Optional pre-fetched yfinance info
     """
     if df is None or df.empty or len(df) < 60:
         return None
@@ -79,12 +85,13 @@ def analyze_single_penny_stock(ticker, df):
         if current_price > 50:
             return None
             
-        # Fetch fundamental info via yfinance
-        try:
-            stock = yf.Ticker(f"{ticker}.NS")
-            info = stock.info
-        except:
-            info = {}
+        # Fetch fundamental info via yfinance if not provided
+        if info is None:
+            try:
+                stock = yf.Ticker(f"{ticker}.NS")
+                info = stock.info
+            except:
+                info = {}
             
         # Extract Fundamentals
         market_cap = info.get('marketCap', 0)
@@ -300,6 +307,13 @@ def analyze_single_penny_stock(ticker, df):
     except Exception:
         return None
 
+def fetch_info(ticker):
+    """Helper to fetch yfinance info in a thread."""
+    try:
+        return ticker, yf.Ticker(f"{ticker}.NS").info
+    except:
+        return ticker, {}
+
 def scan_penny_stocks(tickers=None, callback=None, limit_for_test=None):
     """
     Main entry point for penny stock scanner.
@@ -346,8 +360,18 @@ def scan_penny_stocks(tickers=None, callback=None, limit_for_test=None):
                 batch, period="100d", interval="1d",
                 group_by='ticker', progress=False, threads=False, timeout=20
             )
-            print(f"[DEBUG] scan_penny_stocks: Finished yf.download, data empty={data.empty}", flush=True)
-            
+            print(f"[DEBUG] scan_penny_stocks: Finished yf.download", flush=True)
+
+            # Prefetch info in parallel to speed up analyze_single_penny_stock
+            print(f"[DEBUG] scan_penny_stocks: Prefetching info for batch...", flush=True)
+            batch_info = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as info_executor:
+                clean_batch = [t.replace('.NS', '') for t in batch]
+                futures = [info_executor.submit(fetch_info, t) for t in clean_batch]
+                for future in concurrent.futures.as_completed(futures):
+                    t, info = future.result()
+                    batch_info[t] = info
+
             if data.empty:
                 print(f"[DEBUG] scan_penny_stocks: yf.download returned empty for batch {i}", flush=True)
                 if callback:
@@ -370,7 +394,14 @@ def scan_penny_stocks(tickers=None, callback=None, limit_for_test=None):
                             continue
                             
                         clean_ticker = ticker.replace('.NS', '')
-                        future = executor.submit(analyze_single_penny_stock, clean_ticker, hist)
+                        
+                        # Use prefetched info
+                        info = batch_info.get(clean_ticker, {})
+                        
+                        # Modified analyze_single_penny_stock logic here or pass info to it
+                        # Since I can't easily change the signature without changing all calls, 
+                        # I'll modify analyze_single_penny_stock to take optional info
+                        future = executor.submit(analyze_single_penny_stock, clean_ticker, hist, info)
                         future_to_ticker[future] = clean_ticker
                     except Exception:
                         continue

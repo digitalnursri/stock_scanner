@@ -1118,8 +1118,10 @@ def update_seasonal_cache():
             print(f"Processing chunk {i//chunk_size + 1}: {chunk[0]} to {chunk[-1]}")
             
             try:
-                # Batch download 10y daily data for the chunk
-                data = yf.download(chunk, period="10y", interval="1d", group_by='ticker', progress=False)
+                data = yf.download(
+                    chunk, period="10y", interval="1d",
+                    group_by='ticker', progress=False, threads=False
+                )
                 
                 for ticker in chunk:
                     try:
@@ -1377,6 +1379,17 @@ def get_penny_data():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/penny-scanner/manual-refresh', methods=['POST'])
+def manual_refresh_penny():
+    """Manual trigger for penny scanner refresh."""
+    global _updating_penny_cache
+    if not _updating_penny_cache:
+        _updating_penny_cache = True
+        socketio.start_background_task(update_penny_cache)
+        return jsonify({"status": "started", "message": "Background scan initiated."})
+    else:
+        return jsonify({"status": "already_running", "message": "A scan is already in progress."})
+
 def update_penny_cache():
     """Background worker to refresh penny scanner data."""
     global _updating_penny_cache
@@ -1542,8 +1555,10 @@ def update_vcp_cache():
             except: pass
 
             try:
-                # Batch download for the chunk
-                data = yf.download(chunk, period="1y", group_by='ticker', progress=False, timeout=30)
+                data = yf.download(
+                    chunk, period="1y", group_by='ticker',
+                    progress=False, timeout=30, threads=False
+                )
                 
                 for ticker in chunk:
                     try:
