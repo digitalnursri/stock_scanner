@@ -27,15 +27,18 @@ def get_penny_universe():
         
         # Combine multiple lists for maximum penny stock coverage
         try:
+            # Full NSE Equity list (~2000 stocks)
+            all_stocks = capital_market.equity_list()
+            if not all_stocks.empty:
+                # nselib equity_list uses 'SYMBOL' column
+                tickers.extend([f"{t}.NS" for t in all_stocks['SYMBOL'].tolist()])
+        except Exception as e:
+            print(f"[DEBUG] get_penny_universe: all_stocks failed: {e}")
+
+        try:
             smallcaps = capital_market.niftysmallcap250_equity_list()
             if not smallcaps.empty:
                 tickers.extend([f"{t}.NS" for t in smallcaps['Symbol'].tolist()])
-        except: pass
-
-        try:
-            nifty500 = capital_market.nifty500_equity_list()
-            if not nifty500.empty:
-                tickers.extend([f"{t}.NS" for t in nifty500['Symbol'].tolist()])
         except: pass
             
         # Standard fallback penny stocks that are popular
