@@ -84,8 +84,8 @@ def analyze_single_penny_stock(ticker, df, info=None):
         
         current_price = close[-1]
         
-        # 0. Price Filter (Penny Stock check <= ₹50 or ₹100 for some leeway, let's stick to <= 50)
-        if current_price > 50:
+        # 0. Price Filter (Penny Stock check <= ₹100 for some leeway)
+        if current_price > 100:
             return None
             
         # Fetch fundamental info via yfinance if not provided
@@ -313,7 +313,9 @@ def analyze_single_penny_stock(ticker, df, info=None):
 def fetch_info(ticker):
     """Helper to fetch yfinance info in a thread."""
     try:
-        return ticker, yf.Ticker(f"{ticker}.NS").info
+        # Ticker might already have .NS from scan_penny_stocks
+        symbol = ticker if ticker.endswith('.NS') else f"{ticker}.NS"
+        return ticker, yf.Ticker(symbol).info
     except:
         return ticker, {}
 
