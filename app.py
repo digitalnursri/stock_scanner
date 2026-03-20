@@ -1371,7 +1371,7 @@ def get_penny_data():
             'total_analyzed': cached_data.get('total_scanned', 0),
             'total_matched': len(stocks),
             'breakdown': breakdown,
-            'updated_at': cached_data.get('updated_at'),
+            'updated_at': cached_data.get('updated_at_unix') or (datetime.fromisoformat(cached_data.get('updated_at')).timestamp() if cached_data.get('updated_at') else None),
             'status': 'stale_updating' if is_stale else 'fresh'
         })
     except Exception as e:
@@ -1424,7 +1424,8 @@ def update_penny_cache():
                 'total_scanned': result['total_scanned'],
                 'total_matched': result['total_matched'],
                 'breakdown': result['breakdowns'],
-                'updated_at': datetime.now().isoformat()
+                'updated_at': datetime.now().isoformat(),
+                'updated_at_unix': datetime.now().timestamp()
             }
             with open(PENNY_CACHE_FILE + '.tmp', 'w') as f:
                 json.dump(final_cache, f)

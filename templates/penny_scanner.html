@@ -555,7 +555,8 @@
                 filterLocalData(); // Initial filter & render
                 
                 document.getElementById('statsScanned').textContent = data.total_analyzed || 0;
-                document.getElementById('lastUpdated').textContent = `Updated: ${new Date(data.updated_at).toLocaleTimeString()}`;
+                const updateDate = data.updated_at ? new Date(data.updated_at * 1000) : new Date();
+                document.getElementById('lastUpdated').textContent = `Updated: ${updateDate.toLocaleTimeString()}`;
             } catch (e) {
                 console.error("Fetch error:", e);
             }

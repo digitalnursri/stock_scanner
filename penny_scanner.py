@@ -25,18 +25,18 @@ def get_penny_universe():
         
         tickers = get_nifty250_tickers() # This gets top 250
         
-        # Add Smallcap 250 for better penny coverage
+        # Combine multiple lists for maximum penny stock coverage
         try:
             smallcaps = capital_market.niftysmallcap250_equity_list()
             if not smallcaps.empty:
                 tickers.extend([f"{t}.NS" for t in smallcaps['Symbol'].tolist()])
-        except:
-            try:
-                nifty500 = capital_market.nifty500_equity_list()
-                if not nifty500.empty:
-                    tickers.extend([f"{t}.NS" for t in nifty500['Symbol'].tolist()])
-            except:
-                pass
+        except: pass
+
+        try:
+            nifty500 = capital_market.nifty500_equity_list()
+            if not nifty500.empty:
+                tickers.extend([f"{t}.NS" for t in nifty500['Symbol'].tolist()])
+        except: pass
             
         # Standard fallback penny stocks that are popular
         fallbacks = ["IDEA.NS", "SUZLON.NS", "YESBANK.NS", "ZOMATO.NS", "SOUTHBANK.NS", 
