@@ -90,6 +90,8 @@
             margin-bottom: 2rem;
             border-bottom: 1px solid #334155;
             padding-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 1rem;
         }
 
         .logo {
@@ -708,6 +710,12 @@
             document.getElementById('scanProgress').style.width = pct + '%';
             document.getElementById('scanStatus').textContent = `${data.current} / ${data.total} Stocks Checked`;
             document.getElementById('scanHits').textContent = `Matches Found: ${data.found}`;
+        });
+
+        socket.on('penny_complete', () => {
+            console.log("Penny scan complete, hiding overlay");
+            document.getElementById('scanOverlay').style.display = 'none';
+            fetchData();
         });
 
         socket.on('penny_update', () => {

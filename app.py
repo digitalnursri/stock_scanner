@@ -1439,6 +1439,8 @@ def update_penny_cache():
         print(f"Error in update_penny_cache: {e}")
     finally:
         _updating_penny_cache = False
+        print("[DEBUG] update_penny_cache: Worker finishing, emitting penny_complete", flush=True)
+        socketio.emit('penny_complete')
 
 @app.route('/vcp-scanner')
 def vcp_scanner():
