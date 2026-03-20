@@ -317,13 +317,13 @@ def scan_accumulation(tickers=None, callback=None):
     
     if not tickers:
         return {'error': 'Failed to fetch ticker list', 'stocks': []}
-    
+    # Batch size: Reduce to 25 to be more gentle on Yahoo Finance and better for eventlet
+    batch_size = 25
     total_tickers = len(tickers)
     results = []
     
     # Process in larger batches to maximize yfinance throughput
     # but still allow progress updates
-    batch_size = 50
     
     for i in range(0, total_tickers, batch_size):
         batch = tickers[i:min(i + batch_size, total_tickers)]
@@ -334,12 +334,28 @@ def scan_accumulation(tickers=None, callback=None):
             with open('scanner_progress.txt', 'a') as f:
                 f.write(f"[{pd.Timestamp.now()}] {msg}\n")
             
+            # Check if eventlet is monkey-patched
+            is_eventlet = False
+            try:
+                import eventlet
+                is_eventlet = eventlet.patcher.is_monkey_patched('threading')
+            except ImportError:
+                pass
+
             # Batch download 90 days of daily data
             # Use a single download call for the entire batch
+            # Disable threads if eventlet is active to avoid deadlocks
             data = yf.download(
                 batch, period="90d", interval="1d",
-                group_by='ticker', progress=False, threads=True, timeout=30
+                group_by='ticker', progress=False, 
+                threads=not is_eventlet, 
+                timeout=30
             )
+            
+            if data is None or data.empty:
+                with open('scanner_progress.txt', 'a') as f:
+                    f.write(f"[{pd.Timestamp.now()}] Batch {i//batch_size + 1} returned NO DATA.\n")
+                continue
             
             # Process results in parallel using ThreadPoolExecutor
             # The calculation is relatively fast, but parallelizing ensures 

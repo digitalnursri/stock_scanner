@@ -458,7 +458,7 @@
                 </div>
                 <div class="filter-control">
                     <label>Min Score</label>
-                    <input type="number" id="minScoreFilter" value="4" min="1" max="8" step="1">
+                    <input type="number" id="minScoreFilter" value="1" min="1" max="8" step="1">
                 </div>
                 <div class="filter-control">
                     <label>Search</label>
@@ -543,6 +543,26 @@
         <!-- Rules Legend -->
         <div class="rules-legend">
             <h4>📋 Detection Rules</h4>
+            <div class="stat-card">
+                <div class="stat-label">Last Updated</div>
+                <div class="stat-value" id="lastUpdated">-</div>
+            </div>
+            <!-- Progress Overlay for background updates -->
+            <div id="scanProgressContainer" style="display: none; margin-bottom: 24px; padding: 16px; background: rgba(26, 26, 46, 0.8); border: 1px solid var(--border); border-radius: 12px; backdrop-filter: blur(10px);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="loading-spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
+                        <span id="scanStatusText" style="font-weight: 500; font-size: 0.9rem;">Refreshing accumulation data...</span>
+                    </div>
+                    <span id="scanPercentText" style="font-weight: 600; color: var(--accent);">0%</span>
+                </div>
+                <div style="width: 100%; height: 6px; background: #2d2d44; border-radius: 3px; overflow: hidden;">
+                    <div id="scanProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"></div>
+                </div>
+                <div id="scanDetailsText" style="margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);">
+                    Analyzing Nifty 250 stocks for accumulation patterns. This may take 2-3 minutes.
+                </div>
+            </div>
             <div class="rules-grid">
                 <div class="rule-item">
                     <span class="rule-num">1</span>
@@ -721,9 +741,32 @@
             LivePriceManager.init(socket);
 
             socket.on('accumulation_update', function (data) {
-                console.log('Accumulation update received');
-                showNotification(`Accumulation scan refreshed!`, 'success');
-                loadScannerData();
+                console.log('Accumulation update received', data);
+                if (data.final) {
+                    showNotification(`Accumulation scan complete!`, 'success');
+                    document.getElementById('scanProgressContainer').style.display = 'none';
+                } else if (data.partial) {
+                    // Just refresh data silently or show small toast
+                }
+                loadScannerData(true); // Silent reload
+            });
+
+            socket.on('accumulation_progress', function (data) {
+                console.log('Accumulation progress:', data);
+                const container = document.getElementById('scanProgressContainer');
+                const bar = document.getElementById('scanProgressBar');
+                const percentText = document.getElementById('scanPercentText');
+                const statusText = document.getElementById('scanStatusText');
+
+                container.style.display = 'block';
+                bar.style.width = data.percentage + '%';
+                percentText.textContent = data.percentage + '%';
+                statusText.textContent = `Analyzing stocks: ${data.current} / ${data.total}`;
+            });
+
+            socket.on('accumulation_error', function (data) {
+                showNotification(`Scan Error: ${data.message}`, 'warning');
+                document.getElementById('scanProgressContainer').style.display = 'none';
             });
 
             socket.on('reconnect', (attempt) => {
@@ -731,6 +774,9 @@
                 isConnected = true;
                 showNotification('Reconnected to live updates', 'success');
             });
+
+            // Initial load
+            loadScannerData();
         }
 
         async function changePage(page) {
@@ -755,25 +801,35 @@
                 const data = await response.json();
 
                 if (data.status === 'calculating') {
-                    document.getElementById('emptyState').innerHTML = `<h3>⚙️ Initial Scan in Progress</h3><p>${data.message}</p>`;
+                    document.getElementById('emptyState').innerHTML = `<h3>⚙️ Initial Scan in Progress</h3><p>${data.message}</p>
+                        <div style="max-width: 400px; margin: 20px auto;">
+                            <div style="width: 100%; height: 8px; background: #2d2d44; border-radius: 4px; overflow: hidden;">
+                                <div id="initialScanProgressBar" style="width: 5%; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"></div>
+                            </div>
+                        </div>`;
                     document.getElementById('emptyState').style.display = 'block';
                     document.getElementById('resultsContainer').style.display = 'none';
                     document.getElementById('summaryCards').style.display = 'none';
                     document.getElementById('paginationNav').style.display = 'none';
-                } else if (data.stocks && data.stocks.length > 0) {
-                    renderTable(data.stocks);
-                    updatePaginationUI(data);
-                    updateSummaryCards(data);
-
-                    document.getElementById('resultsContainer').style.display = 'block';
-                    document.getElementById('emptyState').style.display = 'none';
-                    document.getElementById('summaryCards').style.display = 'grid';
                 } else {
-                    document.getElementById('emptyState').innerHTML = `<h3>📊 No Patterns Found</h3>`;
-                    document.getElementById('emptyState').style.display = 'block';
-                    document.getElementById('resultsContainer').style.display = 'none';
-                    document.getElementById('summaryCards').style.display = 'none';
-                    document.getElementById('paginationNav').style.display = 'none';
+                    if (data.status === 'stale_updating') {
+                        document.getElementById('scanProgressContainer').style.display = 'block';
+                    }
+                    if (data.stocks && data.stocks.length > 0) {
+                        renderTable(data.stocks);
+                        updatePaginationUI(data);
+                        updateSummaryCards(data);
+
+                        document.getElementById('resultsContainer').style.display = 'block';
+                        document.getElementById('emptyState').style.display = 'none';
+                        document.getElementById('summaryCards').style.display = 'grid';
+                    } else {
+                        document.getElementById('emptyState').innerHTML = `<h3>📊 No Patterns Found</h3><p>Try lowering the Min Score filter.</p>`;
+                        document.getElementById('emptyState').style.display = 'block';
+                        document.getElementById('resultsContainer').style.display = 'none';
+                        document.getElementById('summaryCards').style.display = 'none';
+                        document.getElementById('paginationNav').style.display = 'none';
+                    }
                 }
             } catch (error) {
                 console.error('Error:', error);
@@ -817,6 +873,12 @@
             document.getElementById('accumulationCount').textContent = data.summary.accumulation;
             document.getElementById('preBreakoutCount').textContent = data.summary.pre_breakout;
             document.getElementById('breakoutCount').textContent = data.summary.breakout;
+            
+            if (data.updated_at) {
+                const date = new Date(data.updated_at);
+                document.getElementById('lastUpdated').textContent = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                document.getElementById('lastUpdated').title = date.toLocaleString();
+            }
         }
 
         function renderTable(stocks) {

@@ -71,28 +71,58 @@ _cached_tickers = []
 _ticker_last_fetched = 0
 TICKER_CACHE_TTL = 3600  # 1 hour
 
+# Flags to track running background updaters (eventlet greenlets)
+_updating_main_cache = False
+_updating_prices_only = False
+_updating_vcp_cache = False
+_updating_accum_cache = False
+_accum_update_start_time = 0 # Watchdog for accumulation update
+_updating_seasonal_cache = False
+_updating_penny_cache = False
+
+# Hardcoded fallback tickers (Nifty 50) if nselib fails
+FALLBACK_TICKERS = [
+    'ADANIENT.NS', 'ADANIPORTS.NS', 'APOLLOHOSP.NS', 'ASIANPAINT.NS', 'AXISBANK.NS', 
+    'BAJAJ-AUTO.NS', 'BAJFINANCE.NS', 'BAJAJFINSV.NS', 'BPCL.NS', 'BHARTIARTL.NS', 
+    'BRITANNIA.NS', 'CIPLA.NS', 'COALINDIA.NS', 'DIVISLAB.NS', 'DRREDDY.NS', 
+    'EICHERMOT.NS', 'GRASIM.NS', 'HCLTECH.NS', 'HDFCBANK.NS', 'HDFCLIFE.NS', 
+    'HEROMOTOCO.NS', 'HINDALCO.NS', 'HINDUNILVR.NS', 'ICICIBANK.NS', 'ITC.NS', 
+    'INDUSINDBK.NS', 'INFY.NS', 'JSWSTEEL.NS', 'KOTAKBANK.NS', 'LTIM.NS', 
+    'LT.NS', 'M&M.NS', 'MARUTI.NS', 'NTPC.NS', 'NESTLEIND.NS', 'ONGC.NS', 
+    'POWERGRID.NS', 'RELIANCE.NS', 'SBILIFE.NS', 'SHREECEM.NS', 'SBIN.NS', 
+    'SUNPHARMA.NS', 'TCS.NS', 'TATACONSUM.NS', 'TATAMOTORS.NS', 'TATASTEEL.NS', 
+    'TECHM.NS', 'TITAN.NS', 'UPL.NS', 'ULTRACEMCO.NS', 'WIPRO.NS'
+]
+
 def get_cached_tickers():
     """Returns tickers, fetching from nselib if cache expired"""
     global _cached_tickers, _ticker_last_fetched
     
     now = time.time()
+    # If we have nothing or it's stale (> 1 hour)
     if not _cached_tickers or (now - _ticker_last_fetched > TICKER_CACHE_TTL):
         try:
             log_debug("[CACHE] Refreshing Ticker list from nselib...")
+            # Use a timeout for the ticker fetch itself if possible
             new_tickers = get_nifty250_tickers()
-            if new_tickers:
+            if new_tickers and len(new_tickers) > 100:
                 _cached_tickers = new_tickers
                 _ticker_last_fetched = now
                 log_debug(f"[CACHE] Ticker list updated: {len(_cached_tickers)} stocks.")
             else:
-                log_debug("[CACHE] WARNING: nselib returned empty ticker list. Using existing cache.")
+                if not _cached_tickers:
+                    log_debug("[CACHE] nselib returned too few tickers. Using FALLBACK.")
+                    _cached_tickers = FALLBACK_TICKERS
+                else:
+                    log_debug("[CACHE] nselib returned too few tickers. Using existing cache.")
         except Exception as e:
             log_debug(f"[CACHE] Error fetching tickers: {e}")
+            if not _cached_tickers:
+                log_debug("[CACHE] Using FALLBACK tickers due to error.")
+                _cached_tickers = FALLBACK_TICKERS
             
     return _cached_tickers
 
-# Flags to track running background updaters (eventlet greenlets)
-_updating_main_cache = False
 _updating_prices_only = False
 _updating_vcp_cache = False
 _updating_accum_cache = False
@@ -1195,8 +1225,14 @@ def get_accumulation_data():
             if (datetime.now() - updated_at).total_seconds() > ACCUMULATION_CACHE_TTL:
                 is_stale = True
 
+        # Watchdog: If update has been running for more than 20 minutes, assume it's stuck and Allow a new one
+        if _updating_accum_cache and (time.time() - _accum_update_start_time > 1200):
+            log_debug("[WATCHDOG] Accumulation update seems stuck (> 20m). Resetting flag.")
+            _updating_accum_cache = False
+
         if is_stale and not _updating_accum_cache:
             _updating_accum_cache = True
+            _accum_update_start_time = time.time()
             eventlet.spawn(update_accumulation_cache)
 
         # Apply client-side filters
